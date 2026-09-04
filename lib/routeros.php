@@ -33,11 +33,22 @@ class RouterOs
      * @throws RouterOsException
      */
     public function connect($host, $port, $user, $pass) {
+        // Resolve BEFORE starting the clock, and connect to the address rather than
+        // the name. Timing fsockopen($host) measures name resolution as well as the
+        // round trip - measured at 40-65 ms of the total on this network - and that
+        // is not latency to the router.
+        $ip = $host;
+        if (!filter_var($host, FILTER_VALIDATE_IP)) {
+            $resolved = gethostbyname($host);
+            // gethostbyname hands back the input unchanged when it cannot resolve.
+            if ($resolved !== $host) $ip = $resolved;
+        }
+
         $t0 = microtime(true);
         $errno = 0; $errstr = '';
         // @ suppressed: a refused or filtered port is an expected outcome here and
         // the message is reported through the exception, not a PHP warning.
-        $this->sock = @fsockopen($host, (int)$port, $errno, $errstr, $this->timeout);
+        $this->sock = @fsockopen($ip, (int)$port, $errno, $errstr, $this->timeout);
         if (!$this->sock) {
             throw new RouterOsException($errstr !== '' ? $errstr : 'connection failed', (int)$errno);
         }

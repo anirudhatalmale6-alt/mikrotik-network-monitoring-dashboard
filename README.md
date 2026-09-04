@@ -96,6 +96,9 @@ ExecStart=/usr/bin/php /var/www/mikrotik-monitor/poller.php --loop
 User=www-data
 Restart=always
 RestartSec=5
+# ping needs a raw socket. Without this the latency column silently falls back
+# to timing the TCP handshake, which on some paths reads much higher than ping.
+AmbientCapabilities=CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
@@ -129,8 +132,16 @@ php poller.php --loop        # what the service runs
   sample is discarded rather than drawn as an enormous spike. "Traffic measured"
   is what this monitor has actually accumulated, so a reboot does not wipe it.
 - **Latency** is an ICMP ping where the host permits it, otherwise the TCP
-  handshake to the API port. The card says which one it measured - they are not
-  the same thing.
+  handshake to the API port. The card says which one it measured, because they are
+  not the same thing: on one of the test routers ping was 162 ms while the
+  handshake to its API port was 253 ms, since that port is reached by a longer
+  path. The name is resolved before the clock starts, so DNS is never counted as
+  latency.
+- **Latency is measured from wherever this dashboard runs**, not from your office.
+  A router that answers WinBox in 2 ms over the LAN will show the full internet
+  round trip here if the dashboard is hosted in another country. That is the
+  number you want from a monitoring system - it tells you how reachable the router
+  is from outside - but it will not match WinBox sitting next to the router.
 - **Only one poll runs at a time.** A file lock in `data/` stops the service and
   an on-demand poll from measuring against each other's baselines, which would
   invent spikes that never happened.
