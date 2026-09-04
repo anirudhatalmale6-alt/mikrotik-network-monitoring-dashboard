@@ -9,6 +9,7 @@
  * the poll.
  */
 
+define('MT_JSON', true);   // preflight answers JSON rather than an HTML page
 require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/poll.php';
 require_once __DIR__ . '/lib/auth.php';

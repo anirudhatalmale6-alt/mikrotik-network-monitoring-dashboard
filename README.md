@@ -65,8 +65,15 @@ location ^~ /data/ { deny all; }
 ```
 
 **Apache** - a `.htaccess` file is already included in `data/`; make sure
-`AllowOverride All` is on, or move the folder outside the web root and adjust
-`MT_DATA` in `lib/db.php`.
+`AllowOverride All` is on.
+
+**Or move it out of the web root entirely** - the safest option, and it needs no
+web server config at all. Create `config.local.php` next to `index.php`:
+
+```php
+<?php define('MT_DATA', '/var/lib/mikrotik-monitor');
+```
+and make that directory writable by PHP.
 
 ## Polling
 

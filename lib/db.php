@@ -5,12 +5,26 @@
  */
 
 define('MT_ROOT', dirname(__DIR__));
-define('MT_DATA', MT_ROOT . '/data');
+
+// Optional per-installation overrides. Create config.local.php next to index.php
+// and define MT_DATA there to keep the database outside the web root - the tidiest
+// way to protect it when you cannot add a deny rule to the web server config:
+//
+//   <?php define('MT_DATA', '/var/lib/mikrotik-monitor');
+//
+if (is_readable(MT_ROOT . '/config.local.php')) require_once MT_ROOT . '/config.local.php';
+
+if (!defined('MT_DATA')) define('MT_DATA', MT_ROOT . '/data');
 define('MT_DB_FILE', MT_DATA . '/monitor.sqlite');
 
 function mt_db() {
     static $pdo = null;
     if ($pdo !== null) return $pdo;
+
+    // Turn "no SQLite driver" or "read-only folder" into a page that says so,
+    // rather than a blank 500 that leaves the installer guessing.
+    require_once __DIR__ . '/preflight.php';
+    mt_preflight();
 
     if (!is_dir(MT_DATA)) @mkdir(MT_DATA, 0775, true);
     $fresh = !file_exists(MT_DB_FILE);

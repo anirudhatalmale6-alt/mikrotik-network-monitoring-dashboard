@@ -322,6 +322,12 @@
         + '<div><b>The admin account still uses the default password.</b> Anyone who can open this page can change your routers.'
         + ' <a href="#" id="noticePass">Change it now</a>.</div></div>';
     }
+    if (state.dbExposed) {
+      out += '<div class="notice notice-warn">' + svg('warn')
+        + '<div><b>Your database is downloadable from the web.</b> data/monitor.sqlite answers over HTTP,'
+        + ' and it holds your router API passwords. Block the data folder in your web server,'
+        + ' or move it out of the web root - see README.md.</div></div>';
+    }
     $('#notices').innerHTML = out;
     var np = $('#noticePass');
     if (np) np.addEventListener('click', function (e) { e.preventDefault(); openPass(); });
@@ -329,6 +335,15 @@
 
   // -------------------------------------------------------------- data cycle
   var lastPoints = [];
+
+  // Ask the web server for the database file. Anything other than a 200 is the
+  // healthy answer. Checked once per page load, not on every refresh.
+  function checkDbExposed() {
+    fetch('data/monitor.sqlite', { method: 'HEAD', cache: 'no-store' })
+      .then(function (r) { if (r.status === 200) { state.dbExposed = true; } })
+      .catch(function () {});
+  }
+
   function refresh() {
     return api('summary').then(function (d) {
       if (!d || !d.success) return;
@@ -544,5 +559,6 @@
     if (e.key === 'Escape') $$('.ovl.show').forEach(function (m) { close('#' + m.id); });
   });
 
+  checkDbExposed();
   refresh().then(loop, loop);
 })();
