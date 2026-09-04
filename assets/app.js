@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  var state = { csrf: '', isAdmin: false, devices: [], pollSeconds: 10, timer: null, deleteId: 0 };
+  var state = { csrf: '', isAdmin: false, devices: [], pollSeconds: 5, uiRefresh: 3, timer: null, deleteId: 0 };
   var $  = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
@@ -253,28 +253,19 @@
 
       + (d.error && d.status === 'offline' ? '<div class="dev-err" style="margin-top:12px">' + esc(d.error) + '</div>' : '')
 
+      // The router's OWN ping. He asked for this and only this: the figure from
+      // the monitoring server to the router told him nothing he wanted to know.
       + '<div class="ping-row"><div style="display:flex;align-items:center;gap:7px">'
       +   '<span style="color:var(--muted)">' + svg('radio') + '</span>'
-      +   '<span style="color:var(--muted)">To router:</span>'
-      +   '<span class="lat ' + latCls + ' mono">' + (on ? d.pingMs + ' ms' : 'N/A') + '</span>'
-      +   (on && d.pingSource ? '<span style="color:var(--muted-2);font-size:10.5px">(' + esc(d.pingSource === 'icmp' ? 'ping from this server' : 'TCP to API port') + ')</span>' : '')
+      +   '<span style="color:var(--muted)">Ping:</span>'
+      +   (on && d.netPingMs !== null && d.netPingMs !== undefined
+            ? '<span class="lat ' + (d.netPingMs < 50 ? 'lat-good' : d.netPingMs < 150 ? 'lat-mid' : 'lat-bad')
+              + ' mono">' + d.netPingMs + ' ms</span>'
+              + '<span style="color:var(--muted-2);font-size:10.5px">to ' + esc(d.netPingTarget || '8.8.8.8') + '</span>'
+            : (on ? '<span style="color:var(--muted-2);font-size:11.5px">'
+                    + esc(d.netPingErr || 'measuring...') + '</span>'
+                  : '<span class="lat lat-bad mono">N/A</span>'))
       + '</div><div class="cs" title="' + esc(d.connStatus) + '">' + esc(d.connStatus) + '</div></div>'
-
-      // Second, separate figure: what the ROUTER measures to the internet. Without
-      // it the card only answers "how far is the router from this server", which is
-      // not the number an operator is used to seeing in WinBox.
-      + (on ? '<div class="ping-row" style="margin-top:-6px">'
-          + '<div style="display:flex;align-items:center;gap:7px">'
-          +   '<span style="color:var(--muted)">' + svg('act') + '</span>'
-          +   '<span style="color:var(--muted)">Router to internet:</span>'
-          +   (d.netPingMs !== null && d.netPingMs !== undefined
-                ? '<span class="lat ' + (d.netPingMs < 50 ? 'lat-good' : d.netPingMs < 150 ? 'lat-mid' : 'lat-bad') + ' mono">'
-                  + d.netPingMs + ' ms</span>'
-                  + '<span style="color:var(--muted-2);font-size:10.5px">(from the router to '
-                  + esc(d.netPingTarget || '8.8.8.8') + ')</span>'
-                : '<span style="color:var(--muted-2);font-size:11.5px">'
-                  + esc(d.netPingErr || 'measuring...') + '</span>')
-          + '</div></div>' : '')
 
       + '<div class="speeds">'
       +   '<div class="speed speed-dl"><div class="k">' + svg('down') + 'Download</div><div class="v mono">' + bps(d.downloadBps) + '</div></div>'
@@ -367,7 +358,8 @@
       state.adminUser = d.adminUser || '';
       state.csrf = d.csrf || state.csrf;
       state.devices = d.devices;
-      state.pollSeconds = d.pollSeconds || 10;
+      state.pollSeconds = d.pollSeconds || 5;
+      state.uiRefresh = d.uiRefresh || 3;
 
       renderAdminBox();
       renderNotices(d);
@@ -390,7 +382,7 @@
     clearTimeout(state.timer);
     state.timer = setTimeout(function () {
       refresh().then(loop, loop);
-    }, Math.max(3, state.pollSeconds) * 1000);
+    }, Math.max(2, state.uiRefresh) * 1000);
   }
 
   var rt;

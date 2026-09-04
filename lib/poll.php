@@ -302,6 +302,9 @@ function mt_poll_device(PDO $db, array $dev) {
 
 /** Poll every enabled device once. */
 function mt_poll_all(PDO $db, $verbose = false) {
+    // Claim the slot for the interval gate in api.php, so a page request and the
+    // background service do not both decide it is their turn.
+    mt_set_setting('last_poll_started', (string)time());
     $devs = $db->query("SELECT * FROM devices WHERE enabled=1 ORDER BY sort_order, id")->fetchAll();
     foreach ($devs as $d) {
         $r = mt_poll_device($db, $d);

@@ -133,11 +133,11 @@ function mt_schema(PDO $db) {
     $defaults = [
         'site_name'      => 'Ariyan-IT Solutions',
         'site_tagline'   => 'MikroTik Network Monitoring Dashboard',
-        'poll_seconds'   => '10',
+        'poll_seconds'   => '5',
         // The router pings this itself, so the dashboard can show internet quality
         // from the router's point of view as well as reachability from this server.
         'net_ping_target'=> '8.8.8.8',
-        'net_ping_every' => '60',    // seconds; /ping costs about a second per packet
+        'net_ping_every' => '30',    // seconds; /ping costs about a second per packet
         'history_points' => '120',   // points kept per device for the live graph
         'api_timeout'    => '6',
     ];
@@ -179,6 +179,15 @@ function mt_setting($key, $default = '') {
 function &mt_settings_cache() {
     static $cache = null;
     return $cache;
+}
+
+/** Read a setting straight from the table, bypassing the per-request cache. For
+ *  values that change on every poll and must never be read stale. */
+function mt_setting_now(PDO $db, $key, $default = '') {
+    $st = $db->prepare("SELECT v FROM settings WHERE k = ?");
+    $st->execute([$key]);
+    $v = $st->fetchColumn();
+    return ($v === false || $v === null || $v === '') ? $default : $v;
 }
 
 /** The poller runs for weeks; without this it would never notice a setting change. */

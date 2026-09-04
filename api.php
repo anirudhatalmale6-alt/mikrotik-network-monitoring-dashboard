@@ -54,12 +54,23 @@ function mt_guard() {
  * host forbids that, because an inline poll makes the caller wait for every router.
  */
 function mt_maybe_poll(PDO $db) {
-    $poll = max(5, (int)mt_setting('poll_seconds', 10));
-    $newest = $db->query("SELECT MAX(last_try) FROM status")->fetchColumn();
-    if ($newest && (time() - strtotime($newest)) < $poll) return;
+    $poll = max(3, (int)mt_setting('poll_seconds', 5));
+
+    // Gate on when a poll last STARTED, not on when it last finished. last_try is
+    // written part way through, so gating on it made every cycle cost the interval
+    // PLUS the duration of the poll - measured at 9 s for a 5 s interval against a
+    // router 160 ms away.
+    //
+    // This marker is deliberately separate from last_try: last_try is what the page
+    // uses to decide the data is stale, and if starting a poll also refreshed that,
+    // a poller that never actually ran would keep the dashboard looking healthy.
+    $started = (int)mt_setting_now($db, 'last_poll_started', 0);
+    if ($started && (time() - $started) < $poll) return;
 
     $lock = mt_lock(0);
     if ($lock === false || $lock === null) return;      // someone else has it
+
+    mt_set_setting('last_poll_started', (string)time());
 
     $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
     $canExec  = function_exists('exec') && !in_array('exec', $disabled, true);
@@ -161,7 +172,13 @@ switch ($action) {
             'summary'    => $summary,
             'devices'    => $devices,
             'history'    => $history,
-            'pollSeconds'=> (int)mt_setting('poll_seconds', 10),
+            'pollSeconds'=> (int)mt_setting('poll_seconds', 5),
+            // How often the PAGE should re-read. Deliberately shorter than the poll
+            // interval: a poll runs in the background and writes after the request
+            // that triggered it has already answered, so a page refreshing on the
+            // same clock as the poll always shows the previous round's numbers and
+            // updates half as often as it should.
+            'uiRefresh'  => max(2, min(5, (int)mt_setting('poll_seconds', 5))),
             'lastPoll'   => $newest,
             // True when nothing has polled recently: the page says so instead of
             // letting old numbers pass for live ones.
