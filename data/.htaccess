@@ -1,0 +1,7 @@
+# The SQLite database in this folder holds router API passwords.
+# Apache: block it from the web. nginx users, see README.md.
+Require all denied
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Deny from all
+</IfModule>

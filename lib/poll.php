@@ -1,0 +1,275 @@
+<?php
+/**
+ * Reading one MikroTik and storing the result.
+ *
+ * Everything the dashboard shows comes from here. Nothing is invented: if the
+ * router cannot be reached the device is marked offline with the real error, and
+ * the figures stay at their last known values rather than being made up.
+ */
+
+require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/routeros.php';
+
+/** Round-trip time in ms. Uses ICMP where the host allows it, otherwise the TCP
+ *  handshake to the API port, and always reports which one it measured - they are
+ *  not the same thing and the difference matters when reading the number. */
+function mt_ping($host, $tcpMs) {
+    if (function_exists('exec') && !in_array('exec', array_map('trim', explode(',', (string)ini_get('disable_functions'))), true)) {
+        $out = []; $rc = 1;
+        @exec('ping -c 1 -W 1 ' . escapeshellarg($host) . ' 2>/dev/null', $out, $rc);
+        if ($rc === 0) {
+            foreach ($out as $line) {
+                if (preg_match('/time[=<]([0-9.]+)\s*ms/i', $line, $m)) {
+                    return [(float)$m[1], 'icmp'];
+                }
+            }
+        }
+    }
+    return [round((float)$tcpMs, 1), 'tcp'];
+}
+
+/** RouterOS reports uptime as "22h9m29s" / "15d08:42:00" depending on version.
+ *  Normalise to something readable without pretending to more precision. */
+function mt_uptime_text($raw) {
+    $raw = trim((string)$raw);
+    if ($raw === '') return '';
+    if (preg_match('/^(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/', $raw, $m)) {
+        $d = (int)($m[1] ?? 0) * 7 + (int)($m[2] ?? 0);
+        $h = (int)($m[3] ?? 0);
+        $mi = (int)($m[4] ?? 0);
+        if ($d > 0) return $d . 'd ' . $h . 'h ' . $mi . 'm';
+        if ($h > 0) return $h . 'h ' . $mi . 'm';
+        return $mi . 'm';
+    }
+    return $raw;
+}
+
+/**
+ * Which interface faces the internet.
+ *
+ * A router counts the same packet on the bridge, on the member port and on the
+ * WAN port, so "speed" has to come from ONE interface or the number is several
+ * times too big. The default route says which one, but it can name more than one
+ * at a time: on a PPPoE site the session rides on ether1, so both appear, and a
+ * VPN tunnel installs one too without being an internet feed. Preference:
+ * PPPoE/LTE session, then a physical port, and a tunnel only as a last resort.
+ */
+function mt_detect_wan(RouterOs $ros, array $ifaces) {
+    $candidates = [];
+    try {
+        foreach ($ros->query('/ip/route/print') as $r) {
+            $dst = trim((string)($r['dst-address'] ?? ''));
+            if ($dst !== '0.0.0.0/0' && $dst !== '::/0') continue;
+            if (isset($r['active']) && in_array(strtolower($r['active']), ['false', 'no'], true)) continue;
+            $gw = (string)($r['immediate-gw'] ?? '');
+            if (strpos($gw, '%') !== false) { $candidates[] = trim(explode('%', $gw, 2)[1]); continue; }
+            $st = (string)($r['gateway-status'] ?? '');
+            if (strpos($st, ' via ') !== false) { $candidates[] = trim(explode(' via ', $st, 2)[1]); continue; }
+            $g = trim((string)($r['gateway'] ?? ''));
+            if ($g !== '' && !preg_match('/\d/', $g)) $candidates[] = $g;   // bare interface name
+        }
+    } catch (Exception $e) {
+        // No route table access - fall through to the name-based guess below.
+    }
+
+    $types = [];
+    foreach ($ifaces as $i) $types[$i['name']] = strtolower((string)($i['type'] ?? ''));
+
+    $tunnels = ['l2tp', 'pptp', 'sstp', 'ovpn', 'gre', 'ipip', 'eoip', 'wg'];
+    $rank = function ($name) use ($types, $tunnels) {
+        $t = $types[$name] ?? '';
+        foreach ($tunnels as $x) if (strpos($t, $x) !== false) return 0;
+        if (strpos($t, 'pppoe') !== false || $t === 'lte' || $t === 'wwan') return 3;
+        if ($t === 'ether' || strpos($t, 'sfp') !== false) return 2;
+        return 1;
+    };
+
+    $best = ''; $bestRank = -1;
+    foreach (array_unique($candidates) as $c) {
+        if ($c === '' || !isset($types[$c])) continue;
+        $r = $rank($c);
+        if ($r > $bestRank) { $bestRank = $r; $best = $c; }
+    }
+    if ($best !== '') return $best;
+
+    // Nothing usable from the routing table: fall back to the busiest running
+    // physical port, and let the admin correct it in the UI.
+    $bestBytes = -1;
+    foreach ($ifaces as $i) {
+        if (!empty($i['disabled']) && $i['disabled'] === 'true') continue;
+        if (($i['running'] ?? '') !== 'true') continue;
+        $bytes = (int)($i['rx-byte'] ?? 0) + (int)($i['tx-byte'] ?? 0);
+        if ($bytes > $bestBytes) { $bestBytes = $bytes; $best = $i['name']; }
+    }
+    return $best;
+}
+
+/**
+ * Poll one device and write its status row.
+ * Returns ['online'=>bool, 'error'=>string].
+ */
+function mt_poll_device(PDO $db, array $dev) {
+    $timeout = max(2, (int)mt_setting('api_timeout', 6));
+    // $now is stamped later, at the moment the byte counters are actually read.
+    // Timing it from the start of the poll instead would divide the bytes by an
+    // interval that includes the connect and login round trips, which vary.
+    $now = $nowTs = null;
+
+    $db->prepare("INSERT OR IGNORE INTO status (device_id) VALUES (?)")->execute([$dev['id']]);
+    $prev = $db->prepare("SELECT * FROM status WHERE device_id=?");
+    $prev->execute([$dev['id']]);
+    $prev = $prev->fetch() ?: [];
+
+    $ros = new RouterOs($timeout);
+    try {
+        $tcpMs = $ros->connect($dev['host'], $dev['api_port'], $dev['username'], $dev['password']);
+    } catch (Exception $e) {
+        $db->prepare("UPDATE status SET online=0, error=?, conn_status=?, ping_ms=0, rx_bps=0, tx_bps=0,
+                      hotspot_users=0, ppp_users=0, cpu=0, ram_pct=0, last_try=? WHERE device_id=?")
+           ->execute([$e->getMessage(), 'Unreachable: ' . $e->getMessage(), date('Y-m-d H:i:s'), $dev['id']]);
+        return ['online' => false, 'error' => $e->getMessage()];
+    }
+
+    try {
+        list($pingMs, $pingSrc) = mt_ping($dev['host'], $tcpMs);
+
+        $res  = $ros->query('/system/resource/print');
+        $r    = $res[0] ?? [];
+        $totalMem = (int)($r['total-memory'] ?? 0);
+        $freeMem  = (int)($r['free-memory'] ?? 0);
+        $ramPct   = $totalMem > 0 ? (int)round(($totalMem - $freeMem) / $totalMem * 100) : 0;
+
+        $identity = '';
+        try { $id = $ros->query('/system/identity/print'); $identity = (string)($id[0]['name'] ?? ''); }
+        catch (Exception $e) { /* identity is cosmetic */ }
+
+        // A router without a hotspot or without PPP is normal, not a fault.
+        $hotspot = 0;
+        try { $hotspot = count($ros->query('/ip/hotspot/active/print')); } catch (Exception $e) {}
+        $ppp = 0;
+        try { $ppp = count($ros->query('/ppp/active/print')); } catch (Exception $e) {}
+
+        $ifaces = $ros->query('/interface/print');
+        // Stamp the reading here: these are the counters the rate is computed from.
+        $nowTs = time();
+        $now   = date('Y-m-d H:i:s', $nowTs);
+
+        $wan = trim((string)$dev['wan_iface']);
+        if ($wan === '' || !array_filter($ifaces, function ($i) use ($wan) { return $i['name'] === $wan; })) {
+            $wan = mt_detect_wan($ros, $ifaces);
+            if ($wan !== '') {
+                $db->prepare("UPDATE devices SET wan_iface=? WHERE id=?")->execute([$wan, $dev['id']]);
+            }
+        }
+
+        $rx = $tx = 0;
+        foreach ($ifaces as $i) {
+            if ($i['name'] === $wan) { $rx = (int)($i['rx-byte'] ?? 0); $tx = (int)($i['tx-byte'] ?? 0); }
+        }
+
+        // Counters are cumulative since boot. Two readings make a rate; a counter
+        // that went backwards means the router rebooted, and that sample is dropped
+        // rather than drawn as an enormous spike.
+        $rxBps = $txBps = 0;
+        $moved = 0;
+        if (!empty($prev['last_at']) && $prev['last_rx'] !== null) {
+            $elapsed = $nowTs - strtotime($prev['last_at']);
+            $maxGap  = max(60, (int)mt_setting('poll_seconds', 10) * 10);
+            if ($elapsed > 0 && $elapsed <= $maxGap && $rx >= (int)$prev['last_rx'] && $tx >= (int)$prev['last_tx']) {
+                $dRx = $rx - (int)$prev['last_rx'];
+                $dTx = $tx - (int)$prev['last_tx'];
+                $rxBps = (int)round($dRx * 8 / $elapsed);
+                $txBps = (int)round($dTx * 8 / $elapsed);
+                $moved = $dRx + $dTx;
+            }
+        }
+
+        $conn = 'Connected (RouterOS API' . (isset($r['version']) && $r['version'] !== '' ? ' ' . explode(' ', $r['version'])[0] : '') . ')';
+
+        $db->prepare("UPDATE status SET online=1, error='', conn_status=?, ping_ms=?, ping_source=?,
+                        cpu=?, ram_pct=?, ram_total_mb=?, ram_free_mb=?, uptime=?, ros_version=?, board=?,
+                        identity=?, hotspot_users=?, ppp_users=?, wan_iface=?, rx_bps=?, tx_bps=?,
+                        last_rx=?, last_tx=?, traffic_bytes=traffic_bytes+?, last_at=?, last_seen=?, last_try=?
+                      WHERE device_id=?")
+           ->execute([
+               $conn, $pingMs, $pingSrc,
+               (int)($r['cpu-load'] ?? 0), $ramPct,
+               (int)round($totalMem / 1048576), (int)round($freeMem / 1048576),
+               mt_uptime_text($r['uptime'] ?? ''), (string)($r['version'] ?? ''), (string)($r['board-name'] ?? ''),
+               $identity, $hotspot, $ppp, $wan, $rxBps, $txBps,
+               $rx, $tx, max(0, $moved), $now, $now, $now,
+               $dev['id'],
+           ]);
+
+        // Keep the reported RouterOS version in the device record in step with
+        // reality, so the admin form is not showing a value from an old firmware.
+        if (!empty($r['version'])) {
+            $db->prepare("UPDATE devices SET ros_version=? WHERE id=?")->execute([(string)$r['version'], $dev['id']]);
+        }
+
+        if ($rxBps > 0 || $txBps > 0 || $moved > 0) {
+            $db->prepare("INSERT INTO samples (device_id, ts, rx_bps, tx_bps) VALUES (?,?,?,?)")
+               ->execute([$dev['id'], $nowTs, $rxBps, $txBps]);
+        }
+
+        $ros->close();
+        return ['online' => true, 'error' => ''];
+    } catch (Exception $e) {
+        $ros->close();
+        $db->prepare("UPDATE status SET online=0, error=?, conn_status=?, last_try=? WHERE device_id=?")
+           ->execute([$e->getMessage(), 'Error: ' . $e->getMessage(), date('Y-m-d H:i:s'), $dev['id']]);
+        return ['online' => false, 'error' => $e->getMessage()];
+    }
+}
+
+/** Poll every enabled device once. */
+function mt_poll_all(PDO $db, $verbose = false) {
+    $devs = $db->query("SELECT * FROM devices WHERE enabled=1 ORDER BY sort_order, id")->fetchAll();
+    foreach ($devs as $d) {
+        $r = mt_poll_device($db, $d);
+        if ($verbose) {
+            printf("%-22s %s%s\n", $d['name'], $r['online'] ? 'online' : 'OFFLINE',
+                   $r['error'] !== '' ? '  (' . $r['error'] . ')' : '');
+        }
+    }
+    mt_trim_history($db);
+    return count($devs);
+}
+
+/** Keep the graph history bounded - this runs forever on a small server. */
+function mt_trim_history(PDO $db) {
+    $keep = max(30, (int)mt_setting('history_points', 120));
+    $poll = max(5, (int)mt_setting('poll_seconds', 10));
+    $cutoff = time() - ($keep * $poll) - 60;
+    $db->prepare("DELETE FROM samples WHERE ts < ?")->execute([$cutoff]);
+}
+
+/**
+ * Only one poll at a time.
+ *
+ * The background service polls on its own clock while a page view can also
+ * trigger one. Two pollers would each compute a rate from a baseline the other
+ * had already moved, inventing spikes that never happened on the wire.
+ *
+ * The lock file lives next to the database, NOT in /tmp: a service started with
+ * systemd PrivateTmp gets a different /tmp from a CLI run, and a lock in a
+ * world-writable sticky directory can be refused by fs.protected_regular. Either
+ * way the lock would silently protect nothing.
+ */
+function mt_lock($waitSeconds = 0) {
+    if (!is_dir(MT_DATA)) @mkdir(MT_DATA, 0775, true);
+    $fh = @fopen(MT_DATA . '/poll.lock', 'c');
+    if (!$fh) return null;                 // cannot lock; caller decides
+    $deadline = time() + $waitSeconds;
+    do {
+        if (flock($fh, LOCK_EX | LOCK_NB)) return $fh;
+        if (time() >= $deadline) break;
+        usleep(200000);
+    } while (true);
+    fclose($fh);
+    return false;
+}
+
+function mt_unlock($fh) {
+    if (is_resource($fh)) { flock($fh, LOCK_UN); fclose($fh); }
+}

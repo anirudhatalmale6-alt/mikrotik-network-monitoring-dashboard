@@ -1,0 +1,3 @@
+data/monitor.sqlite
+data/monitor.sqlite-*
+data/poll.lock
