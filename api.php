@@ -67,18 +67,33 @@ function mt_maybe_poll(PDO $db) {
     $started = (int)mt_setting_now($db, 'last_poll_started', 0);
     if ($started && (time() - $started) < $poll) return;
 
+    // Watchdog. If a poll was dispatched but nothing ever wrote a result, the
+    // background command is not running - and because the dispatch marked the poll
+    // as started, the gate above would block every retry and polling would stop for
+    // good. That is exactly what a silently failing exec() produced. When the last
+    // dispatch is far older than the last actual result, stop trusting the
+    // background route and do the work here instead.
+    $lastTry  = $db->query("SELECT MAX(last_try) FROM status")->fetchColumn();
+    $lastTryTs = $lastTry ? strtotime($lastTry) : 0;
+    $dispatchFailed = $started > 0 && ($started - $lastTryTs) > max(30, $poll * 4);
+
     $lock = mt_lock(0);
     if ($lock === false || $lock === null) return;      // someone else has it
 
     mt_set_setting('last_poll_started', (string)time());
 
-    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
-    $canExec  = function_exists('exec') && !in_array('exec', $disabled, true);
-    if ($canExec && PHP_OS_FAMILY !== 'Windows') {
+    $bin = $dispatchFailed ? false : mt_php_cli($db);
+    if ($bin !== false) {
         mt_unlock($lock);                                // the child takes the lock
-        @exec('php ' . escapeshellarg(__DIR__ . '/poller.php') . ' --once > /dev/null 2>&1 &');
+        @exec(escapeshellarg($bin) . ' ' . escapeshellarg(__DIR__ . '/poller.php')
+              . ' --once > /dev/null 2>&1 &');
         return;
     }
+
+    // No usable command line, or the background route proved unreliable: poll here.
+    // Slower for whoever triggers it, but it is the difference between a dashboard
+    // that updates and one that quietly freezes.
+    if ($dispatchFailed) mt_set_setting('php_cli', 'none');
     try { mt_poll_all($db); } catch (Throwable $e) { /* a failed poll must not break the page */ }
     mt_unlock($lock);
 }
@@ -220,6 +235,70 @@ switch ($action) {
         if (strlen($new) < 6) mt_out(['success' => false, 'message' => 'Use at least 6 characters.'], 400);
         mt_change_password(mt_admin_name(), $new);
         mt_out(['success' => true, 'message' => 'Password changed.']);
+        break;
+
+    // ------------------------------------------------------- secure the database
+    case 'secure_db':
+        mt_guard();
+
+        // Somewhere the web server cannot serve: the folder above the document root.
+        $docRoot = rtrim((string)($_SERVER['DOCUMENT_ROOT'] ?? ''), '/');
+        if ($docRoot === '' || !is_dir($docRoot)) {
+            mt_out(['success' => false, 'message' => 'Cannot work out the web root on this host - please move the data folder by hand, see README.md.'], 400);
+        }
+        $target = dirname($docRoot) . '/mikrotik-monitor-data';
+        if (rtrim(MT_DATA, '/') === $target) {
+            mt_out(['success' => true, 'message' => 'The database is already outside the web root.']);
+        }
+        if (!is_dir($target) && !@mkdir($target, 0750, true) && !is_dir($target)) {
+            mt_out(['success' => false, 'message' => 'Could not create ' . $target . ' - the account may not have permission.'], 500);
+        }
+        if (!is_writable($target)) {
+            mt_out(['success' => false, 'message' => $target . ' is not writable.'], 500);
+        }
+
+        // Flush the write-ahead log into the main file first, so a plain copy is a
+        // complete database rather than one missing its most recent transactions.
+        try { $db->exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (Throwable $e) {}
+
+        $src = MT_DB_FILE;
+        $dst = $target . '/monitor.sqlite';
+        if (!@copy($src, $dst)) {
+            mt_out(['success' => false, 'message' => 'Could not copy the database to ' . $target . '.'], 500);
+        }
+
+        // Verify the copy BEFORE removing anything. A half-written database that is
+        // merely in a safer place is a worse outcome than one that is exposed.
+        try {
+            $check = new PDO('sqlite:' . $dst, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+            $devA = (int)$db->query("SELECT COUNT(*) FROM devices")->fetchColumn();
+            $devB = (int)$check->query("SELECT COUNT(*) FROM devices")->fetchColumn();
+            $admA = (int)$db->query("SELECT COUNT(*) FROM admins")->fetchColumn();
+            $admB = (int)$check->query("SELECT COUNT(*) FROM admins")->fetchColumn();
+            $check = null;
+            if ($devA !== $devB || $admA !== $admB) {
+                @unlink($dst);
+                mt_out(['success' => false, 'message' => 'The copy did not match the original, so nothing was changed.'], 500);
+            }
+        } catch (Throwable $e) {
+            @unlink($dst);
+            mt_out(['success' => false, 'message' => 'The copy could not be opened, so nothing was changed: ' . $e->getMessage()], 500);
+        }
+
+        // Point the app at the new location.
+        $conf = MT_ROOT . '/config.local.php';
+        $php  = "<?php if (!defined('MT_DATA')) define('MT_DATA', " . var_export($target, true) . ");\n";
+        if (@file_put_contents($conf, $php) === false) {
+            @unlink($dst);
+            mt_out(['success' => false, 'message' => 'Could not write config.local.php, so nothing was changed.'], 500);
+        }
+
+        // Only now remove the exposed copy, the lock, and the WAL side files.
+        foreach ([$src, $src . '-wal', $src . '-shm', MT_DATA . '/poll.lock'] as $old) {
+            if (is_file($old)) @unlink($old);
+        }
+        mt_out(['success' => true, 'moved' => $target,
+                'message' => 'Database moved to ' . $target . ', outside the web root. Reload the page.']);
         break;
 
     // --------------------------------------------------------------- settings

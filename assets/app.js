@@ -334,12 +334,26 @@
     if (state.dbExposed) {
       out += '<div class="notice notice-warn">' + svg('warn')
         + '<div><b>Your database is downloadable from the web.</b> data/monitor.sqlite answers over HTTP,'
-        + ' and it holds your router API passwords. Block the data folder in your web server,'
-        + ' or move it out of the web root - see README.md.</div></div>';
+        + ' and it holds your router API passwords.'
+        + (state.isAdmin
+            ? ' <a href="#" id="secureDb"><b>Move it out of the web root now</b></a> - one click, the copy is'
+              + ' checked before the exposed one is deleted.'
+            : ' Ask an administrator to move it out of the web root.')
+        + '</div></div>';
     }
     $('#notices').innerHTML = out;
     var np = $('#noticePass');
     if (np) np.addEventListener('click', function (e) { e.preventDefault(); openPass(); });
+    var sd = $('#secureDb');
+    if (sd) sd.addEventListener('click', function (e) {
+      e.preventDefault();
+      sd.textContent = 'Moving...';
+      api('secure_db', {}).then(function (r) {
+        toast(r.message, r.success ? 'ok' : 'bad');
+        if (r.success) { state.dbExposed = false; setTimeout(function () { location.reload(); }, 1200); }
+        else { sd.innerHTML = '<b>Move it out of the web root now</b>'; }
+      });
+    });
   }
 
   // -------------------------------------------------------------- data cycle

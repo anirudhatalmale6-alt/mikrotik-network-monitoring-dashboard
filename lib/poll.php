@@ -326,6 +326,56 @@ function mt_trim_history(PDO $db) {
 }
 
 /**
+ * Find a PHP command line binary that actually works, or false.
+ *
+ * The dashboard used to shell out to a bare "php", which is not on PATH for the web
+ * user on plenty of hosts - CyberPanel and OpenLiteSpeed ship lsphp under
+ * /usr/local/lsws/lsphpXX/bin/php. exec() then failed silently, and because the
+ * poll had already been marked as started nothing ever polled again.
+ *
+ * So this does not guess: every candidate is asked to print a token, and only a
+ * binary that prints it is used. The answer is cached because the check costs a
+ * process, and re-checked occasionally in case the host changes.
+ */
+function mt_php_cli(PDO $db) {
+    $cached = mt_setting_now($db, 'php_cli', '');
+    $when   = (int)mt_setting_now($db, 'php_cli_at', 0);
+    if ($cached !== '' && (time() - $when) < 86400) {
+        return $cached === 'none' ? false : $cached;
+    }
+
+    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
+    if (!function_exists('exec') || in_array('exec', $disabled, true) || PHP_OS_FAMILY === 'Windows') {
+        mt_set_setting('php_cli', 'none');
+        mt_set_setting('php_cli_at', (string)time());
+        return false;
+    }
+
+    $candidates = [];
+    if (defined('PHP_BINARY') && PHP_BINARY !== '') $candidates[] = PHP_BINARY;
+    $candidates[] = 'php';
+    // CyberPanel / OpenLiteSpeed, newest first.
+    foreach (['84', '83', '82', '81', '80', '74'] as $v) {
+        $candidates[] = "/usr/local/lsws/lsphp$v/bin/php";
+    }
+    $candidates[] = '/usr/bin/php';
+    $candidates[] = '/usr/local/bin/php';
+
+    foreach (array_unique($candidates) as $bin) {
+        $out = []; $rc = 1;
+        @exec(escapeshellarg($bin) . ' -r ' . escapeshellarg('echo "MTOK";') . ' 2>/dev/null', $out, $rc);
+        if ($rc === 0 && in_array('MTOK', array_map('trim', $out), true)) {
+            mt_set_setting('php_cli', $bin);
+            mt_set_setting('php_cli_at', (string)time());
+            return $bin;
+        }
+    }
+    mt_set_setting('php_cli', 'none');
+    mt_set_setting('php_cli_at', (string)time());
+    return false;
+}
+
+/**
  * Only one poll at a time.
  *
  * The background service polls on its own clock while a page view can also
