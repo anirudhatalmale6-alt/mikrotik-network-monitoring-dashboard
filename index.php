@@ -190,6 +190,38 @@ $tag  = mt_setting('site_tagline', 'MikroTik Network Monitoring Dashboard');
   </div>
 </div>
 
+<!-- ---------------------------------------------------------------- settings -->
+<div class="ovl" id="settingsModal">
+  <div class="modal">
+    <div class="modal-hd">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+      <div><h3>Settings</h3><p>How often the routers are read, and what they ping.</p></div>
+    </div>
+    <form id="settingsForm">
+      <div class="modal-bd">
+        <div class="fields">
+          <div class="f full"><label>Panel name</label><input type="text" name="site_name" maxlength="60"></div>
+          <div class="f full"><label>Subtitle</label><input type="text" name="site_tagline" maxlength="80"></div>
+          <div class="f"><label>Read the routers every (seconds)</label>
+            <input type="number" name="poll_seconds" min="3" max="300">
+            <span class="hint">Lower is more live but asks the routers more often.</span></div>
+          <div class="f"><label>Ping target</label>
+            <input type="text" name="net_ping_target" placeholder="8.8.8.8" maxlength="64">
+            <span class="hint">The router pings this itself.</span></div>
+          <div class="f full"><label>Run that ping every (seconds)</label>
+            <input type="number" name="net_ping_every" min="10" max="3600">
+            <span class="hint">Each ping costs the router about a second, so it runs on a slower clock than the rest.</span></div>
+        </div>
+        <div class="result" id="settingsResult"></div>
+      </div>
+      <div class="modal-ft">
+        <button type="button" class="btn btn-slate" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div class="toasts" id="toasts"></div>
 <script src="assets/app.js?v=1"></script>
 </body>

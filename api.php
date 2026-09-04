@@ -222,6 +222,34 @@ switch ($action) {
         mt_out(['success' => true, 'message' => 'Password changed.']);
         break;
 
+    // --------------------------------------------------------------- settings
+    case 'settings_get':
+        mt_require_admin();
+        mt_out(['success' => true, 'settings' => [
+            'site_name'       => mt_setting('site_name', 'Ariyan-IT Solutions'),
+            'site_tagline'    => mt_setting('site_tagline', 'MikroTik Network Monitoring Dashboard'),
+            'poll_seconds'    => (int)mt_setting('poll_seconds', 5),
+            'net_ping_target' => mt_setting('net_ping_target', '8.8.8.8'),
+            'net_ping_every'  => (int)mt_setting('net_ping_every', 30),
+        ]]);
+        break;
+
+    case 'settings_save':
+        mt_guard();
+        $b = mt_body();
+        // Clamped: a 1 second poll would hammer the routers, and a ping target that
+        // is blank would leave the card with nothing to show.
+        $name = trim((string)($b['site_name'] ?? ''));
+        $tag  = trim((string)($b['site_tagline'] ?? ''));
+        $tgt  = trim((string)($b['net_ping_target'] ?? ''));
+        mt_set_setting('site_name',       $name !== '' ? substr($name, 0, 60) : 'Ariyan-IT Solutions');
+        mt_set_setting('site_tagline',    $tag  !== '' ? substr($tag, 0, 80)  : 'MikroTik Network Monitoring Dashboard');
+        mt_set_setting('poll_seconds',    (string)max(3, min(300, (int)($b['poll_seconds'] ?? 5))));
+        mt_set_setting('net_ping_target', $tgt !== '' ? substr($tgt, 0, 64) : '8.8.8.8');
+        mt_set_setting('net_ping_every',  (string)max(10, min(3600, (int)($b['net_ping_every'] ?? 30))));
+        mt_out(['success' => true, 'message' => 'Settings saved.']);
+        break;
+
     // ---------------------------------------------------------------- devices
     case 'device_save':
         mt_guard();
