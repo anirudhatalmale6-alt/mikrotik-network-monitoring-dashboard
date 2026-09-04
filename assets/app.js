@@ -255,10 +255,26 @@
 
       + '<div class="ping-row"><div style="display:flex;align-items:center;gap:7px">'
       +   '<span style="color:var(--muted)">' + svg('radio') + '</span>'
-      +   '<span style="color:var(--muted)">Latency:</span>'
+      +   '<span style="color:var(--muted)">To router:</span>'
       +   '<span class="lat ' + latCls + ' mono">' + (on ? d.pingMs + ' ms' : 'N/A') + '</span>'
-      +   (on && d.pingSource ? '<span style="color:var(--muted-2);font-size:10.5px">(' + esc(d.pingSource === 'icmp' ? 'ping' : 'TCP to API') + ')</span>' : '')
+      +   (on && d.pingSource ? '<span style="color:var(--muted-2);font-size:10.5px">(' + esc(d.pingSource === 'icmp' ? 'ping from this server' : 'TCP to API port') + ')</span>' : '')
       + '</div><div class="cs" title="' + esc(d.connStatus) + '">' + esc(d.connStatus) + '</div></div>'
+
+      // Second, separate figure: what the ROUTER measures to the internet. Without
+      // it the card only answers "how far is the router from this server", which is
+      // not the number an operator is used to seeing in WinBox.
+      + (on ? '<div class="ping-row" style="margin-top:-6px">'
+          + '<div style="display:flex;align-items:center;gap:7px">'
+          +   '<span style="color:var(--muted)">' + svg('act') + '</span>'
+          +   '<span style="color:var(--muted)">Router to internet:</span>'
+          +   (d.netPingMs !== null && d.netPingMs !== undefined
+                ? '<span class="lat ' + (d.netPingMs < 50 ? 'lat-good' : d.netPingMs < 150 ? 'lat-mid' : 'lat-bad') + ' mono">'
+                  + d.netPingMs + ' ms</span>'
+                  + '<span style="color:var(--muted-2);font-size:10.5px">(from the router to '
+                  + esc(d.netPingTarget || '8.8.8.8') + ')</span>'
+                : '<span style="color:var(--muted-2);font-size:11.5px">'
+                  + esc(d.netPingErr || 'measuring...') + '</span>')
+          + '</div></div>' : '')
 
       + '<div class="speeds">'
       +   '<div class="speed speed-dl"><div class="k">' + svg('down') + 'Download</div><div class="v mono">' + bps(d.downloadBps) + '</div></div>'

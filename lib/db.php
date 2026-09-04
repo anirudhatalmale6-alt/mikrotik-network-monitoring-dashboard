@@ -118,10 +118,26 @@ function mt_schema(PDO $db) {
 
     $db->exec("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '')");
 
+    // Columns added after the first release. SQLite has no ADD COLUMN IF NOT EXISTS,
+    // so check what the table already has - this must be safe to run on every start.
+    mt_add_columns($db, 'status', [
+        // The router's OWN ping to the internet. Different from ping_ms, which is this
+        // server's ping TO the router: two different directions over two different
+        // paths, and showing only one of them is what makes the figure look "wrong".
+        'net_ping_ms'     => 'REAL',
+        'net_ping_target' => "TEXT NOT NULL DEFAULT ''",
+        'net_ping_at'     => 'TEXT',
+        'net_ping_err'    => "TEXT NOT NULL DEFAULT ''",
+    ]);
+
     $defaults = [
         'site_name'      => 'Ariyan-IT Solutions',
         'site_tagline'   => 'MikroTik Network Monitoring Dashboard',
         'poll_seconds'   => '10',
+        // The router pings this itself, so the dashboard can show internet quality
+        // from the router's point of view as well as reachability from this server.
+        'net_ping_target'=> '8.8.8.8',
+        'net_ping_every' => '60',    // seconds; /ping costs about a second per packet
         'history_points' => '120',   // points kept per device for the live graph
         'api_timeout'    => '6',
     ];
@@ -135,6 +151,19 @@ function mt_schema(PDO $db) {
         $st = $db->prepare("INSERT INTO admins (username, password_hash) VALUES (?, ?)");
         $st->execute(['admin', password_hash('admin123', PASSWORD_DEFAULT)]);
         $db->prepare("INSERT OR REPLACE INTO settings (k,v) VALUES ('default_password_in_use','1')")->execute();
+    }
+}
+
+/** Add any of $cols that the table does not already have. Idempotent by design:
+ *  it runs on every request, so upgrading is just replacing the files. */
+function mt_add_columns(PDO $db, $table, array $cols) {
+    $have = [];
+    foreach ($db->query("PRAGMA table_info(" . $table . ")")->fetchAll() as $c) {
+        $have[$c['name']] = true;
+    }
+    foreach ($cols as $name => $decl) {
+        if (isset($have[$name])) continue;
+        $db->exec("ALTER TABLE $table ADD COLUMN $name $decl");
     }
 }
 

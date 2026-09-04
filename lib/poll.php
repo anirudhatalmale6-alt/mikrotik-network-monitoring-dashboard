@@ -45,6 +45,65 @@ function mt_uptime_text($raw) {
 }
 
 /**
+ * RouterOS reports durations as "26ms", "1s26ms", "1m2s". Turn one into ms.
+ * Returns null when there is no usable figure, so a timed-out packet is never
+ * counted as a fast one.
+ */
+function mt_duration_ms($raw) {
+    $raw = trim((string)$raw);
+    if ($raw === '') return null;
+    if (!preg_match_all('/(\d+(?:\.\d+)?)(ms|us|s|m|h)/', $raw, $m, PREG_SET_ORDER)) return null;
+    $ms = 0.0;
+    foreach ($m as $part) {
+        $v = (float)$part[1];
+        switch ($part[2]) {
+            case 'us': $ms += $v / 1000; break;
+            case 'ms': $ms += $v; break;
+            case 's':  $ms += $v * 1000; break;
+            case 'm':  $ms += $v * 60000; break;
+            case 'h':  $ms += $v * 3600000; break;
+        }
+    }
+    return $ms;
+}
+
+/**
+ * Ask the ROUTER to ping the internet and report what it saw.
+ *
+ * This is the number an operator recognises from WinBox, and it is a different
+ * measurement from ping_ms: this is router -> internet, ping_ms is this server ->
+ * router. On a router in Bangladesh monitored from Europe the two legitimately
+ * differ by an order of magnitude, and showing only one of them is what makes the
+ * dashboard look wrong.
+ *
+ * /ping costs about a second per packet, so it runs on its own slower schedule.
+ * Returns [ms|null, error]; the error is kept so "no permission" is visible rather
+ * than looking like a router that cannot reach the internet.
+ */
+function mt_router_ping(RouterOs $ros, $target, $count = 3) {
+    try {
+        $rows = $ros->query('/ping', ['=address=' . $target, '=count=' . (int)$count]);
+    } catch (Exception $e) {
+        $msg = $e->getMessage();
+        // The API user needs the "test" policy for /ping. Say so plainly - it is a
+        // one-tick fix on the router, not a fault in the link.
+        if (stripos($msg, 'not enough permissions') !== false) {
+            return [null, 'API user needs the "test" permission on the router'];
+        }
+        return [null, $msg];
+    }
+    $best = null;
+    foreach ($rows as $r) {
+        if (isset($r['status']) && $r['status'] !== '' && stripos($r['status'], 'timeout') !== false) continue;
+        $ms = mt_duration_ms($r['time'] ?? '');
+        if ($ms === null) continue;
+        if ($best === null || $ms < $best) $best = $ms;   // best of N, like ping's min
+    }
+    if ($best === null) return [null, 'no reply from ' . $target];
+    return [round($best, 1), ''];
+}
+
+/**
  * Which interface faces the internet.
  *
  * A router counts the same packet on the bridge, on the member port and on the
@@ -184,12 +243,30 @@ function mt_poll_device(PDO $db, array $dev) {
             }
         }
 
+        // The router's own internet ping, refreshed on a slower clock than the rest
+        // because each packet costs about a second of the poll.
+        $netMs     = isset($prev['net_ping_ms']) ? $prev['net_ping_ms'] : null;
+        $netTarget = (string)($prev['net_ping_target'] ?? '');
+        $netAt     = $prev['net_ping_at'] ?? null;
+        $netErr    = (string)($prev['net_ping_err'] ?? '');
+        $target    = trim((string)mt_setting('net_ping_target', '8.8.8.8'));
+        $every     = max(15, (int)mt_setting('net_ping_every', 60));
+        // Back off after a failure: a router whose API user lacks the permission
+        // must not be asked every minute forever.
+        if ($netErr !== '') $every = max($every, 600);
+        if ($target !== '' && (!$netAt || (time() - strtotime($netAt)) >= $every)) {
+            list($netMs, $netErr) = mt_router_ping($ros, $target);
+            $netTarget = $target;
+            $netAt = $now;
+        }
+
         $conn = 'Connected (RouterOS API' . (isset($r['version']) && $r['version'] !== '' ? ' ' . explode(' ', $r['version'])[0] : '') . ')';
 
         $db->prepare("UPDATE status SET online=1, error='', conn_status=?, ping_ms=?, ping_source=?,
                         cpu=?, ram_pct=?, ram_total_mb=?, ram_free_mb=?, uptime=?, ros_version=?, board=?,
                         identity=?, hotspot_users=?, ppp_users=?, wan_iface=?, rx_bps=?, tx_bps=?,
-                        last_rx=?, last_tx=?, traffic_bytes=traffic_bytes+?, last_at=?, last_seen=?, last_try=?
+                        last_rx=?, last_tx=?, traffic_bytes=traffic_bytes+?, last_at=?, last_seen=?, last_try=?,
+                        net_ping_ms=?, net_ping_target=?, net_ping_at=?, net_ping_err=?
                       WHERE device_id=?")
            ->execute([
                $conn, $pingMs, $pingSrc,
@@ -198,6 +275,7 @@ function mt_poll_device(PDO $db, array $dev) {
                mt_uptime_text($r['uptime'] ?? ''), (string)($r['version'] ?? ''), (string)($r['board-name'] ?? ''),
                $identity, $hotspot, $ppp, $wan, $rxBps, $txBps,
                $rx, $tx, max(0, $moved), $now, $now, $now,
+               $netMs, $netTarget, $netAt, $netErr,
                $dev['id'],
            ]);
 

@@ -82,7 +82,8 @@ switch ($action) {
             SELECT d.*, s.online, s.error, s.conn_status, s.ping_ms, s.ping_source, s.cpu, s.ram_pct,
                    s.ram_total_mb, s.ram_free_mb, s.uptime, s.ros_version AS live_version, s.board,
                    s.identity, s.hotspot_users, s.ppp_users, s.wan_iface AS live_wan,
-                   s.rx_bps, s.tx_bps, s.traffic_bytes, s.last_seen, s.last_try
+                   s.rx_bps, s.tx_bps, s.traffic_bytes, s.last_seen, s.last_try,
+                   s.net_ping_ms, s.net_ping_target, s.net_ping_err
               FROM devices d LEFT JOIN status s ON s.device_id = d.id
              ORDER BY d.sort_order, d.id")->fetchAll();
 
@@ -120,6 +121,11 @@ switch ($action) {
                 'error'       => (string)$r['error'],
                 'pingMs'      => $online ? (float)$r['ping_ms'] : null,
                 'pingSource'  => (string)$r['ping_source'],
+                // The router's own ping to the internet - a different direction from
+                // pingMs, so both are sent and both are labelled on the card.
+                'netPingMs'     => ($online && $r['net_ping_ms'] !== null) ? (float)$r['net_ping_ms'] : null,
+                'netPingTarget' => (string)$r['net_ping_target'],
+                'netPingErr'    => (string)$r['net_ping_err'],
                 'cpu'         => $online ? (int)$r['cpu'] : 0,
                 'ramPct'      => $online ? (int)$r['ram_pct'] : 0,
                 'ramTotalMb'  => (int)$r['ram_total_mb'],
