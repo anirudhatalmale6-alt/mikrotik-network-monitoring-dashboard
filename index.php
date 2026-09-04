@@ -13,6 +13,20 @@ require_once __DIR__ . '/lib/helpers.php';
 $db   = mt_db();               // creates the database on first visit
 $site = mt_setting('site_name', 'Ariyan-IT Solutions');
 $tag  = mt_setting('site_tagline', 'MikroTik Network Monitoring Dashboard');
+
+/**
+ * Cache buster taken from the file's own modification time.
+ *
+ * A hardcoded ?v=1 meant that after replacing the files the browser happily kept
+ * serving the JavaScript it already had, so an update looked like it had not been
+ * applied at all - the user re-uploads, sees the old screen, and reasonably
+ * concludes nothing changed. Stamping mtime makes every changed file a new URL.
+ */
+function mt_asset($rel) {
+    $path = __DIR__ . '/' . ltrim($rel, '/');
+    $v = @filemtime($path);
+    return mt_h($rel) . '?v=' . ($v ?: '1');
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -22,7 +36,7 @@ $tag  = mt_setting('site_tagline', 'MikroTik Network Monitoring Dashboard');
 <meta name="robots" content="noindex, nofollow">
 <title><?= mt_h($site) ?> - <?= mt_h($tag) ?></title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%234f46e5'/><path d='M20 55h13l9-24 12 44 9-24h17' fill='none' stroke='white' stroke-width='8' stroke-linecap='round' stroke-linejoin='round'/></svg>">
-<link rel="stylesheet" href="assets/app.css?v=1">
+<link rel="stylesheet" href="<?= mt_asset('assets/app.css') ?>">
 </head>
 <body>
 
@@ -223,6 +237,6 @@ $tag  = mt_setting('site_tagline', 'MikroTik Network Monitoring Dashboard');
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script src="assets/app.js?v=1"></script>
+<script src="<?= mt_asset('assets/app.js') ?>"></script>
 </body>
 </html>
