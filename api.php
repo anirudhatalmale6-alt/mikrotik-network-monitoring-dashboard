@@ -122,8 +122,10 @@ function mt_live_why(PDO $db, $deviceCount) {
     $online = (int)$db->query("SELECT COUNT(*) FROM status s JOIN devices d ON d.id=s.device_id
                                 WHERE d.enabled=1 AND s.online=1")->fetchColumn();
     if ($online === 0) return 'No router is reachable yet, so there is nothing to stream.';
-    if (mt_setting_now($db, 'php_cli', '') === 'none') {
-        $why = mt_setting_now($db, 'php_cli_why', 'this host does not allow starting a background process');
+    if (mt_setting_now($db, 'php_cli', '') === 'none' || mt_bw_spawn_broken($db)) {
+        $why = mt_bw_spawn_broken($db)
+            ? mt_setting_now($db, 'bw_spawn_why', 'this host stops the background process straight away')
+            : mt_setting_now($db, 'php_cli_why', 'this host does not allow starting a background process');
         // The fallback is already running in this request, so say what IS happening
         // before saying what would be better - the figures are not stuck at the poll
         // interval any more, they are just costing a round trip each.
@@ -163,8 +165,11 @@ switch ($action) {
         if (mt_setting('live_bandwidth', '1') === '1') {
             mt_maybe_bw($db);
             // No lane, and no way to start one on this host: take the reading here.
-            // Rate limited so several open tabs cannot each dial the routers.
-            if (!mt_bw_alive($db) && mt_php_cli($db) === false) {
+            // "No way" covers both a host with no command line at all AND one where
+            // the command line works but the process gets reaped - the second case
+            // used to fall through to nothing, which is what left the figures at the
+            // poll interval with no explanation.
+            if (!mt_bw_alive($db) && (mt_php_cli($db) === false || mt_bw_spawn_broken($db))) {
                 $last = (float)mt_setting_now($db, 'bw_inline_at', 0);
                 if (microtime(true) - $last >= 0.8) {
                     mt_set_setting('bw_inline_at', (string)microtime(true));

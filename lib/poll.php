@@ -271,11 +271,13 @@ function mt_poll_device(PDO $db, array $dev) {
 
         $conn = 'Connected (RouterOS API' . (isset($r['version']) && $r['version'] !== '' ? ' ' . explode(' ', $r['version'])[0] : '') . ')';
 
-        // If the live lane is streaming this router's speed once a second, its
-        // figure is newer than anything derived here from two counters taken poll
-        // interval apart. Writing ours would make the number jump backwards to an
-        // older average every time the slow poll came round.
-        $liveLane = mt_bw_alive($db);
+        // Whoever wrote this row's speed most recently owns it. That is the lane when
+        // it is streaming, but also the direct reader on a host where no lane can
+        // run - and checking only for the lane meant the poll overwrote the direct
+        // reader's figure every cycle, dropping it to zero whenever this poll had no
+        // usable pair of counters of its own.
+        $bwFresh  = !empty($prev['bw_at']) && (time() - strtotime($prev['bw_at'])) <= 10;
+        $liveLane = mt_bw_alive($db) || $bwFresh;
         if ($liveLane) { $rxBps = (int)$prev['rx_bps']; $txBps = (int)$prev['tx_bps']; }
 
         $db->prepare("UPDATE status SET online=1, error='', conn_status=?, ping_ms=?, ping_source=?,
@@ -487,7 +489,18 @@ function mt_spawn($bin, array $args) {
     }
     $cmd = escapeshellarg($bin);
     foreach ($args as $a) $cmd .= ' ' . escapeshellarg($a);
-    @exec($cmd . ' > /dev/null 2>&1 &');
+
+    // Detach properly where the system allows it. LiteSpeed and php-fpm can reap
+    // what is still a child of the request once the request ends, which kills a
+    // lane that was starting perfectly well - setsid puts it in its own session and
+    // nohup keeps the hangup from reaching it.
+    static $prefix = null;
+    if ($prefix === null) {
+        $out = []; $rc = 1;
+        @exec('command -v setsid 2>/dev/null', $out, $rc);
+        $prefix = ($rc === 0 && !empty($out[0])) ? 'setsid nohup ' : 'nohup ';
+    }
+    @exec($prefix . $cmd . ' > /dev/null 2>&1 &');
     return true;
 }
 

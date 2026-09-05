@@ -25,6 +25,17 @@ require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/routeros.php';
 require_once __DIR__ . '/poll.php';   // mt_php_cli, and the lock helpers
 
+/**
+ * True while dispatching a lane is known not to work on this host.
+ *
+ * Set by the watchdog in mt_maybe_bw after repeated dispatches produced no
+ * heartbeat, and it expires on its own so a host that is fixed - exec re-enabled,
+ * a process limit raised - starts streaming again without anyone intervening.
+ */
+function mt_bw_spawn_broken(PDO $db) {
+    return (int)mt_setting_now($db, 'bw_no_spawn_until', 0) > time();
+}
+
 /** Its own lock, separate from the poll lock: the lane and the ordinary poller are
  *  meant to run at the same time, they just must not each run twice. */
 function mt_bw_lock() {
@@ -307,11 +318,38 @@ function mt_bw_trim(PDO $db) {
  * repeated every second.
  */
 function mt_maybe_bw(PDO $db) {
-    if (mt_bw_alive($db)) return;
+    if (mt_bw_alive($db)) {
+        mt_set_setting('bw_dispatch_fails', '0');
+        return;
+    }
+    if (mt_bw_spawn_broken($db)) return;
 
-    // Do not re-dispatch faster than the lane takes to make its first heartbeat.
     $tried = (int)mt_setting_now($db, 'bw_dispatched', 0);
-    if ($tried && (time() - $tried) < 20) return;
+    $age   = $tried > 0 ? time() - $tried : PHP_INT_MAX;
+
+    // Watchdog, and it has to be judged BEFORE the re-dispatch gate below - putting
+    // the gate first meant the verdict could only ever be reached on the same slow
+    // clock as the retries, so giving up took twice as long as intended.
+    //
+    // A host can allow exec - the probe runs and prints its token - and still not let
+    // a process outlive the request that started it: LiteSpeed reaps orphans. The
+    // dispatch then "succeeds", nothing reports back, and because a command line WAS
+    // found the inline fallback never got its turn either. That is what leaves the
+    // figures at the poll interval with nothing saying why.
+    if ($tried > 0 && $age >= 10 && (int)mt_setting_now($db, 'bw_alive', 0) < $tried) {
+        $fails = (int)mt_setting_now($db, 'bw_dispatch_fails', 0) + 1;
+        mt_set_setting('bw_dispatch_fails', (string)$fails);
+        if ($fails >= 2) {
+            mt_set_setting('bw_no_spawn_until', (string)(time() + 600));
+            mt_set_setting('bw_dispatch_fails', '0');
+            mt_set_setting('bw_spawn_why', 'the background process starts but this host stops it straight away');
+            return;                      // the direct read takes over from here
+        }
+    }
+
+    // Give the last dispatch time to report in before starting another.
+    if ($age < 10) return;
+
     mt_set_setting('bw_dispatched', (string)time());
 
     $bin = mt_php_cli($db);
