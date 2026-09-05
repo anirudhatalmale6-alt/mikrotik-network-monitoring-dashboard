@@ -157,6 +157,70 @@ function mt_history(PDO $db) {
 
 switch ($action) {
 
+    /* ------------------------------------------------------------------ stream
+       Once-a-second bandwidth on a host that will not run anything in the
+       background - LiteSpeed and CyberPanel kill a process the moment the request
+       that started it ends, so there is nowhere for a lane to live.
+
+       The answer is to make the REQUEST the lane. This holds the connection open,
+       runs exactly the same loop the background lane runs, and pushes each reading
+       to the browser as a server-sent event. The page gets a genuine value per
+       second with nothing installed and no cron.
+
+       It gives up the slot after a minute and the browser reconnects, so a PHP
+       worker is never held indefinitely, and the page falls back to asking once a
+       second by itself if this endpoint is buffered or refused. */
+    case 'stream':
+        if (mt_setting('live_bandwidth', '1') !== '1') mt_out(['success' => false, 'message' => 'Live bandwidth is off.'], 409);
+
+        // The session lock would block every other request to this site for as long
+        // as this one runs, which on a one-worker host is the whole dashboard.
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+
+        @set_time_limit(0);
+        ignore_user_abort(false);          // stop as soon as the browser goes away
+
+        header('Content-Type: text/event-stream');
+        header('Cache-Control: no-cache');
+        header('Connection: keep-alive');
+        header('X-Accel-Buffering: no');    // nginx and LiteSpeed: do not buffer this
+        while (ob_get_level() > 0) ob_end_flush();
+
+        $emit = function ($event, array $data) {
+            echo 'event: ' . $event . "\n";
+            echo 'data: ' . json_encode($data) . "\n\n";
+            @ob_flush();
+            flush();
+            return connection_aborted() === 0;
+        };
+
+        // A first frame straight away: the page uses it to decide the stream is
+        // really coming through rather than sitting in somebody's buffer.
+        $emit('hello', ['ok' => true, 'ts' => time()]);
+
+        $lock = mt_bw_lock();
+        if ($lock === false || $lock === null) {
+            // A lane already has it - that is the better source, so let the page go
+            // back to its ordinary once-a-second requests rather than compete.
+            $emit('busy', ['message' => 'another live reader is already running']);
+            exit;
+        }
+
+        try {
+            mt_bw_run($db, 55, false, function ($ts, $rx, $tx, $rates) use ($emit) {
+                $devs = [];
+                foreach ($rates as $id => $r) {
+                    $devs[] = ['id' => (int)$id, 'downloadBps' => (int)$r['rx'], 'uploadBps' => (int)$r['tx']];
+                }
+                return $emit('tick', ['ts' => $ts, 'rx' => $rx, 'tx' => $tx, 'devices' => $devs]);
+            });
+        } catch (Throwable $e) {
+            $emit('error', ['message' => $e->getMessage()]);
+        } finally {
+            if (is_resource($lock)) { flock($lock, LOCK_UN); fclose($lock); }
+        }
+        exit;
+
     // ------------------------------------------------------- live figures only
     // Small and cheap on purpose: the page asks for this every second to move the
     // bandwidth numbers, and asks for the full summary on a slower clock. Sending

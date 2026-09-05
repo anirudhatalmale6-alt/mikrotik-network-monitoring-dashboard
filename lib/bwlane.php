@@ -54,7 +54,7 @@ function mt_bw_lock() {
  * a page request, and a process that outlives the interest in it is a process
  * nobody will ever stop.
  */
-function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false) {
+function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false, $onTick = null) {
     $deadline  = $lifetime > 0 ? time() + $lifetime : PHP_INT_MAX;
     $conns     = [];     // device_id => ['ros'=>RouterOs,'iface'=>string,'name'=>string]
     $rates     = [];     // device_id => ['rx'=>int,'tx'=>int,'at'=>int]
@@ -201,6 +201,12 @@ function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false) {
                ->execute([$now, $rxT, $txT]);
             $lastTotal = $now;
             mt_set_setting('bw_alive', (string)$now);
+
+            // Let a caller see each tick as it happens. This is what lets the page
+            // itself hold the stream open on a host that will not run a background
+            // process - same loop, same readings, delivered to a browser instead of
+            // only to the database.
+            if ($onTick !== null && $onTick($now, $rxT, $txT, $rates) === false) break;
         }
 
         if ($now - $lastTrim >= 60) { mt_bw_trim($db); $lastTrim = $now; }

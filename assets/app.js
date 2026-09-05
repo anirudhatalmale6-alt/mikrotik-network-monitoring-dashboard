@@ -482,36 +482,99 @@
     return 'every ' + state.pollSeconds + 's';
   }
 
+  // Write one set of live figures into the page. Shared by the streaming path and
+  // the once-a-second request path so both show the same thing.
+  function applyLive(totalRx, totalTx, devices) {
+    setText('tv-dl', bps(totalRx));
+    setText('tv-ul', bps(totalTx));
+    setText('tv-bw', bps(totalRx + totalTx));
+    (devices || []).forEach(function (x) {
+      setText('dl-' + x.id, bps(x.downloadBps));
+      setText('ul-' + x.id, bps(x.uploadBps));
+      if (x.trafficBytes !== undefined) setText('tb-' + x.id, bytes(x.trafficBytes));
+      // Keep the copy the device-list modal reads in step, so opening it does
+      // not show speeds from the last full refresh.
+      for (var i = 0; i < state.devices.length; i++) {
+        if (state.devices[i].id === x.id) {
+          state.devices[i].downloadBps = x.downloadBps;
+          state.devices[i].uploadBps   = x.uploadBps;
+        }
+      }
+    });
+    var pl = $('#pollLabel');
+    if (pl) pl.textContent = liveLabel(state.liveMode);
+  }
+
+  function pushPoint(ts, rx, tx) {
+    if (lastPoints.length && lastPoints[lastPoints.length - 1].ts === ts) return;
+    lastPoints.push({ ts: ts, rx: rx, tx: tx });
+    if (lastPoints.length > 300) lastPoints.shift();
+    drawChart('#chart', lastPoints);
+  }
+
+  /* ------------------------------------------------------------------ stream
+     Where the host allows it, the figures are pushed to us instead of asked for.
+     One held-open request replaces one request per second, and it works on hosts
+     that kill background processes - the request IS the reader.
+
+     Everything here is optional: if the endpoint is buffered by the web server,
+     refused, or silent, the page drops back to asking once a second. */
+  var stream = { es: null, ok: false, guard: null, off: false };
+
+  function startStream() {
+    if (stream.off || stream.es || !window.EventSource) return false;
+    try { stream.es = new EventSource('api.php?action=stream'); }
+    catch (e) { return false; }
+
+    stream.ok = false;
+    // A proxy that buffers server-sent events looks exactly like a working one
+    // until nothing arrives. Give it a few seconds, then stop waiting.
+    clearTimeout(stream.guard);
+    stream.guard = setTimeout(function () { if (!stream.ok) stopStream(true); }, 8000);
+
+    stream.es.addEventListener('tick', function (ev) {
+      var d;
+      try { d = JSON.parse(ev.data); } catch (e) { return; }
+      stream.ok = true;
+      state.liveMode = 'stream';
+      applyLive(d.rx, d.tx, d.devices);
+      pushPoint(d.ts, d.rx, d.tx);
+    });
+
+    // The server says a background lane already holds the reader - that is the
+    // better source, so stop competing and go back to ordinary requests.
+    stream.es.addEventListener('busy', function () { stopStream(true); });
+    stream.es.addEventListener('failed', function () { stopStream(true); });
+
+    // Fires both on a real failure and on the ordinary close when the server ends
+    // its minute. Only the first is a reason to give up.
+    stream.es.onerror = function () { if (!stream.ok) stopStream(true); };
+    return true;
+  }
+
+  function stopStream(fallback) {
+    clearTimeout(stream.guard);
+    if (stream.es) { stream.es.close(); stream.es = null; }
+    if (!fallback) return;
+    stream.off = true;
+    // Try again later: a host can start allowing it, or the lane that was holding
+    // the reader can finish.
+    setTimeout(function () { stream.off = false; }, 120000);
+    liveLoop();
+  }
+
   function liveTick() {
     return api('live').then(function (d) {
       if (!d || !d.success) return;
       var s = d.summary;
       state.liveLane = !!d.liveLane;
+      state.liveMode = d.liveMode || state.liveMode;
 
-      setText('tv-dl', bps(s.totalDownloadBps));
-      setText('tv-ul', bps(s.totalUploadBps));
-      setText('tv-bw', bps(s.totalBandwidthBps));
       setText('tv-hs', Number(s.totalHotspotUsers || 0).toLocaleString());
       var hsFoot = document.getElementById('tf-hs');
       if (hsFoot) hsFoot.innerHTML = '<b>' + (s.totalPppoeUsers || 0) + '</b> PPPoE sessions';
 
-      (d.devices || []).forEach(function (x) {
-        setText('dl-' + x.id, bps(x.downloadBps));
-        setText('ul-' + x.id, bps(x.uploadBps));
-        setText('tb-' + x.id, bytes(x.trafficBytes));
-        // Keep the copy the device-list modal reads in step, so opening it does
-        // not show speeds from the last full refresh.
-        for (var i = 0; i < state.devices.length; i++) {
-          if (state.devices[i].id === x.id) {
-            state.devices[i].downloadBps = x.downloadBps;
-            state.devices[i].uploadBps   = x.uploadBps;
-          }
-        }
-      });
-
-      state.liveMode = d.liveMode || state.liveMode;
-      var pl = $('#pollLabel');
-      if (pl) pl.textContent = liveLabel(state.liveMode);
+      applyLive(s.totalDownloadBps, s.totalUploadBps, d.devices || []);
 
       lastPoints = d.history || lastPoints;
       drawChart('#chart', lastPoints);
@@ -524,6 +587,8 @@
       // Nothing to update while the tab is in the background, and a phone left on
       // the dashboard would otherwise keep asking once a second all night.
       if (document.hidden) { liveLoop(); return; }
+      // The stream is already delivering; asking as well would only duplicate it.
+      if (stream.ok) { liveLoop(); return; }
       liveTick().then(liveLoop, liveLoop);
     }, 1000);
   }
@@ -745,5 +810,14 @@
 
   checkDbExposed();
   refresh().then(loop, loop);
+  // Prefer the pushed stream; liveLoop is started by stopStream if it is not
+  // available, and skips its own fetch while the stream is delivering.
+  startStream();
   liveLoop();
+
+  // A browser that is hidden for a long time keeps a dead stream around; reopen
+  // when the tab comes back rather than waiting for the next failure.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && !stream.es && !stream.off) startStream();
+  });
 })();
