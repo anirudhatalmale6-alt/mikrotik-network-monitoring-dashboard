@@ -241,13 +241,22 @@ function mt_asset($rel) {
             The graph history is not included.</p>
           <div class="bk-row">
             <a class="btn btn-slate" id="backupBtn" href="api.php?action=backup" download>Download backup</a>
+          </div>
+          <p class="hint bk-warn">Keep the file somewhere private - it contains your router passwords.</p>
+
+          <!-- Restore is the half nobody needs on the dashboard they are already
+               using, and the file picker looks broken if you open it before you
+               have made a backup. Say so before the buttons, not after. -->
+          <h4 class="bk-h2">Restore from a backup</h4>
+          <p class="hint">Only needed on a <em>new</em> installation - after moving to another host.
+            Make the backup on the old dashboard first, then bring the file here.
+            Restoring replaces the router list on this dashboard.</p>
+          <div class="bk-row">
             <label class="btn btn-slate" for="restoreFile">Choose backup file</label>
             <input type="file" id="restoreFile" accept=".json,application/json" hidden>
             <button type="button" class="btn btn-primary" id="restoreBtn" disabled>Restore</button>
           </div>
           <p class="hint" id="restoreName"></p>
-          <p class="hint bk-warn">Keep the file somewhere private - it contains your router passwords.
-            Restoring replaces the router list on this dashboard.</p>
           <div class="result" id="restoreResult"></div>
         </div>
       </div>

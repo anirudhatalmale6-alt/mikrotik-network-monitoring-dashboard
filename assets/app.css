@@ -304,6 +304,7 @@ a { color: var(--indigo); }
 .bk { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .bk h4 { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
 .bk .hint { display: block; }
+.bk-h2 { margin-top: 16px; }
 .bk-row { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0 8px; }
 /* The file input is hidden and driven by its label, so the two ways in look the
    same as every other button on the page. */
