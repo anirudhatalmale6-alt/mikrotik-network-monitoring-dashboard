@@ -145,7 +145,9 @@ function mt_asset($rel) {
           <div class="f"><label>Location</label><input type="text" name="location" placeholder="Dubai Main Office"></div>
           <div class="f"><label>RouterOS version</label><input type="text" name="rosVersion" placeholder="detected automatically" readonly>
             <span class="hint">Read from the router on each poll.</span></div>
-          <div class="f full"><label>Description</label><input type="text" name="description" placeholder="Core edge router - CCR2004"></div>
+          <div class="f"><label>Model</label><input type="text" name="board" placeholder="detected automatically" readonly>
+            <span class="hint">The board name the router reports. Shown on the card, nothing to type.</span></div>
+          <div class="f full"><label>Description</label><input type="text" name="description" placeholder="Your own note about this router"></div>
           <div class="f full"><label>Speed is measured on interface</label>
             <select name="wanIface"><option value="">Detect automatically from the default route</option></select>
             <span class="hint">A router counts the same traffic on the bridge and on its member ports, so the speed is read from one interface only.</span></div>

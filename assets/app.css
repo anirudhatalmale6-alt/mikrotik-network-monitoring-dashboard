@@ -210,6 +210,7 @@ a { color: var(--indigo); }
 .dev-hd .ico svg { width: 20px; height: 20px; }
 .dev-hd h4 { font-size: 15px; font-weight: 700; letter-spacing: -.2px; }
 .dev-hd .meta { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+.dev-hd .dev-model { color: var(--muted-2); margin-top: 2px; }
 .dev-hd .right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
 
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; border: 1px solid; }

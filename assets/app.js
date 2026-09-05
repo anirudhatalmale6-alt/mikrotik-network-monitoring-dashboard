@@ -263,6 +263,7 @@
           return '<div class="lrow"><div class="lrow-main">'
             + '<div class="lrow-name">' + esc(d.name) + '</div>'
             + '<div class="lrow-meta mono">' + esc(d.host) + ':' + d.apiPort
+            + (d.board ? ' &middot; ' + esc(d.board) : '')
             + (d.location ? ' &middot; ' + esc(d.location) : '') + '</div>'
             + '<div class="lrow-meta">' + why + '</div>'
             + '</div><div>' + pill + '</div></div>';
@@ -294,7 +295,15 @@
       +   '<div style="min-width:0"><h4>' + esc(d.name) + '</h4>'
       +     '<div class="meta mono">' + esc(d.host) + ':' + d.apiPort
       +       (d.location ? ' <span style="color:#cbd5e1">&bull;</span> <span style="font-family:inherit">' + esc(d.location) + '</span>' : '')
-      +     '</div></div></div>'
+      +     '</div>'
+      // The model comes from the router itself (board-name in /system/resource),
+      // like the RouterOS version. It was already being stored and only shown to
+      // signed-out visitors, so the one person who runs the dashboard never saw it
+      // and was typing the model into the description by hand. On its own line
+      // rather than as a chip: board names run to 18 characters and wrapped.
+      +     (d.board ? '<div class="meta mono dev-model" title="Model reported by the router">'
+                     + esc(d.board) + '</div>' : '')
+      +     '</div></div>'
       + '<div class="right">' + pill
       +   (d.rosVersion ? '<span class="ver mono">' + esc(d.rosVersion.split(' ')[0]) + '</span>' : '')
       + '</div></div>'
@@ -342,7 +351,7 @@
       + '</div><div class="tools">'
       +   (state.isAdmin
             ? '<button class="btn btn-light btn-sm" data-act="poll" data-id="' + d.id + '">' + svg('refresh') + 'Poll now</button>'
-            : '<span style="font-size:11px;color:var(--muted-2)">' + (d.board ? esc(d.board) : '') + '</span>')
+            : '')
       +   admin
       + '</div></div></div>';
   }
@@ -801,6 +810,7 @@
       f.location.value = dev.location;
       f.description.value = dev.description;
       f.rosVersion.value = dev.rosVersion;
+      f.board.value = dev.board || '';
       f.enabled.checked = dev.enabled;
       if (dev.wanIface) {
         sel.innerHTML += '<option value="' + esc(dev.wanIface) + '" selected>' + esc(dev.wanIface) + ' (current)</option>';
@@ -848,6 +858,7 @@
         if (r.uptime) extra.push('up ' + r.uptime);
         showResult('#deviceResult', true, r.message + (extra.length ? ' - ' + extra.join(', ') + '.' : ''));
         if (r.rosVersion) f.rosVersion.value = r.rosVersion;
+        if (r.board) f.board.value = r.board;
       } else {
         showResult('#deviceResult', false, r.message);
       }
