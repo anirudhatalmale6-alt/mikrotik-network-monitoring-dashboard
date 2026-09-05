@@ -235,7 +235,12 @@ function mt_asset($rel) {
              logins. Not the graph history, which is thousands of rows a day and
              costs nothing to rebuild. -->
         <div class="bk">
-          <h4>Backup of this dashboard</h4>
+          <h4>This installation</h4>
+          <p class="hint">Everything on this dashboard - routers, passwords, settings, readings -
+            lives in one folder on this site, and no other site can see it:</p>
+          <p class="bk-path" id="dataDir"></p>
+
+          <h4 class="bk-h2">Backup of this dashboard</h4>
           <p class="hint">Saves the routers you added, their API logins, your settings and your
             dashboard password - so if you move to another host you type nothing in again.
             The graph history is not included.</p>

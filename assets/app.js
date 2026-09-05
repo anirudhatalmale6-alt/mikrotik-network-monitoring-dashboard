@@ -704,6 +704,7 @@
       f.net_ping_target.value = r.settings.net_ping_target;
       f.net_ping_every.value  = r.settings.net_ping_every;
       f.live_bandwidth.checked = !!r.settings.live_bandwidth;
+      $('#dataDir').textContent = r.dataDir || '';
       resetRestore();
       open('#settingsModal');
     });

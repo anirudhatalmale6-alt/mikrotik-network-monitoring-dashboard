@@ -425,9 +425,29 @@ switch ($action) {
         if ($docRoot === '' || !is_dir($docRoot)) {
             mt_out(['success' => false, 'message' => 'Cannot work out the web root on this host - please move the data folder by hand, see README.md.'], 400);
         }
-        $target = dirname($docRoot) . '/mikrotik-monitor-data';
-        if (rtrim(MT_DATA, '/') === $target) {
-            mt_out(['success' => true, 'message' => 'The database is already outside the web root.']);
+        // Nothing to do if the data folder is already somewhere the web server does
+        // not serve. Checked by containment rather than by comparing against the one
+        // path this endpoint would have picked, so a folder moved by hand - or by an
+        // older version of this code - is recognised instead of being moved again.
+        if (strpos(rtrim(MT_DATA, '/') . '/', $docRoot . '/') !== 0) {
+            mt_out(['success' => true, 'message' => 'The database is already outside the web root (' . MT_DATA . ').']);
+        }
+
+        // The folder name carries the site's own hostname. Two subdomains on this
+        // panel can share a parent directory - /home/site/public_html/live and
+        // /home/site/public_html/speed both sit under /home/site/public_html - and a
+        // fixed name would have pointed both installations at ONE database, which is
+        // the opposite of keeping each subdomain's routers to itself.
+        $host = preg_replace('/:\d+$/', '', strtolower((string)($_SERVER['HTTP_HOST'] ?? '')));
+        $host = trim(preg_replace('/[^a-z0-9.-]+/', '-', $host), '-.');
+        $target = dirname($docRoot) . '/mikrotik-monitor-data' . ($host !== '' ? '-' . $host : '');
+
+        // Never write into a database that is already there: it would belong to
+        // another installation, and merging two sets of routers is not something
+        // that can be undone from the dashboard.
+        if (is_file($target . '/monitor.sqlite')) {
+            mt_out(['success' => false, 'message' => 'There is already a database at ' . $target
+                    . '/monitor.sqlite, so nothing was changed. Move or remove that file first.'], 409);
         }
         if (!is_dir($target) && !@mkdir($target, 0750, true) && !is_dir($target)) {
             mt_out(['success' => false, 'message' => 'Could not create ' . $target . ' - the account may not have permission.'], 500);
@@ -665,7 +685,10 @@ switch ($action) {
             'net_ping_target' => mt_setting('net_ping_target', '8.8.8.8'),
             'net_ping_every'  => (int)mt_setting('net_ping_every', 30),
             'live_bandwidth'  => mt_setting('live_bandwidth', '1') === '1',
-        ]]);
+        // Shown in Settings so an installer can SEE which folder this site is using.
+        // Two subdomains are separate because they are two folders, and the fastest
+        // way to be sure of that is to read the two paths rather than be told.
+        ], 'dataDir' => MT_DATA, 'dbFile' => MT_DB_FILE]);
         break;
 
     case 'settings_save':

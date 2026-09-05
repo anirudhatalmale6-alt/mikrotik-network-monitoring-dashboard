@@ -156,6 +156,21 @@ cp mikrotik-monitor-bw.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now mikrotik-monitor-bw
 ```
 
+## One installation per site
+
+There is no shared server and no central database. Each copy of these files keeps
+everything - routers, API passwords, settings, readings - in **its own folder**,
+so two subdomains never see each other's routers. Put the files in
+`live.example.com/` and `speed.example.com/` and you have two independent
+dashboards. **Settings → This installation** prints the exact folder in use, which
+is the quickest way to confirm it.
+
+By default that folder is `data/` next to `index.php`. Pressing *Move it out of
+the web root* moves it to `<parent of the document root>/mikrotik-monitor-data-<hostname>`.
+The hostname is part of the name on purpose: on panels where two subdomains share
+a parent directory, a fixed name would have pointed both installations at one
+database.
+
 ## Backup and restore
 
 **Settings → Backup of this dashboard.** *Download backup* saves a single JSON

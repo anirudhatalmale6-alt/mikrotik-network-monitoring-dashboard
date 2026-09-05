@@ -305,6 +305,12 @@ a { color: var(--indigo); }
 .bk h4 { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
 .bk .hint { display: block; }
 .bk-h2 { margin-top: 16px; }
+.bk-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; color: var(--ink-2); background: #f8fafc;
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+  margin-top: 7px; overflow-wrap: anywhere;
+}
 .bk-row { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0 8px; }
 /* The file input is hidden and driven by its label, so the two ways in look the
    same as every other button on the page. */
