@@ -4,7 +4,8 @@
 (function () {
   'use strict';
 
-  var state = { csrf: '', isAdmin: false, devices: [], pollSeconds: 5, uiRefresh: 3, timer: null, deleteId: 0 };
+  var state = { csrf: '', isAdmin: false, devices: [], pollSeconds: 5, uiRefresh: 3,
+                timer: null, liveTimer: null, liveLane: false, deleteId: 0 };
   var $  = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
@@ -203,25 +204,71 @@
   }
 
   // ------------------------------------------------------------------ render
-  function tile(cls, label, value, iconName, foot) {
-    return '<div class="tile ' + cls + '"><div class="top"><div>'
-      + '<div class="lbl">' + esc(label) + '</div><div class="val">' + value + '</div></div>'
+  /* opts.id   - element id for the value, so the live tick can rewrite just the
+                 number instead of re-rendering the whole row every second.
+     opts.list - which device list clicking the tile should open. */
+  function tile(cls, label, value, iconName, foot, opts) {
+    opts = opts || {};
+    var attrs = 'class="tile ' + cls + (opts.list ? ' tile-click"' : '"');
+    if (opts.list) attrs += ' data-list="' + opts.list + '" title="Click to see which routers"';
+    return '<div ' + attrs + '><div class="top"><div>'
+      + '<div class="lbl">' + esc(label) + '</div>'
+      + '<div class="val"' + (opts.id ? ' id="' + opts.id + '"' : '') + '>' + value + '</div></div>'
       + '<div class="ico">' + svg(iconName) + '</div></div>'
-      + '<div class="foot">' + foot + '</div></div>';
+      + '<div class="foot"' + (opts.footId ? ' id="' + opts.footId + '"' : '') + '>' + foot + '</div></div>';
   }
 
   function renderTiles(s) {
     $('#tiles').innerHTML =
       tile('t-emerald', 'Online devices', s.onlineDevices + ' <small>/ ' + s.totalDevices + '</small>', 'wifi',
-           '<span class="blip" style="width:8px;height:8px"><i></i></span> Active and reachable')
+           '<span class="blip" style="width:8px;height:8px"><i></i></span> Active and reachable &middot; <b>see list</b>',
+           { id: 'tv-online', list: 'online' })
       + tile('t-rose', 'Offline devices', s.offlineDevices, 'wifioff',
-             s.disabledDevices > 0 ? 'Unreachable &middot; <b>' + s.disabledDevices + ' disabled</b>' : 'Unreachable')
+             (s.disabledDevices > 0 ? 'Unreachable &middot; <b>' + s.disabledDevices + ' disabled</b>' : 'Unreachable')
+             + ' &middot; <b>see list</b>',
+             { id: 'tv-offline', list: 'offline' })
       + tile('t-amber', 'Active hotspot users', s.totalHotspotUsers.toLocaleString(), 'users',
-             '<b>' + s.totalPppoeUsers + '</b> PPPoE sessions')
-      + tile('t-cyan', 'Total download', bps(s.totalDownloadBps), 'down', 'Combined ingress')
-      + tile('t-indigo', 'Total upload', bps(s.totalUploadBps), 'up', 'Combined egress')
-      + tile('t-blue', 'Total bandwidth', bps(s.totalBandwidthBps), 'act', 'Download + upload')
-      + tile('t-slate', 'Total MikroTik devices', s.totalDevices, 'server', 'Monitored routers');
+             '<b>' + s.totalPppoeUsers + '</b> PPPoE sessions', { id: 'tv-hs', footId: 'tf-hs' })
+      + tile('t-cyan', 'Total download', bps(s.totalDownloadBps), 'down', 'Combined ingress', { id: 'tv-dl' })
+      + tile('t-indigo', 'Total upload', bps(s.totalUploadBps), 'up', 'Combined egress', { id: 'tv-ul' })
+      + tile('t-blue', 'Total bandwidth', bps(s.totalBandwidthBps), 'act', 'Download + upload', { id: 'tv-bw' })
+      + tile('t-slate', 'Total MikroTik devices', s.totalDevices, 'server', 'Monitored routers &middot; <b>see list</b>',
+             { id: 'tv-total', list: 'all' });
+  }
+
+  /* ------------------------------------------------------------- device list
+     He asked to be able to click a count and see WHICH routers it means. The
+     data is already on the page, so this needs no request. */
+  function openDeviceList(kind) {
+    var devs = state.devices || [];
+    var title, rows;
+    if (kind === 'online')       { title = 'Online routers';  rows = devs.filter(function (d) { return d.status === 'online'; }); }
+    else if (kind === 'offline') { title = 'Offline routers'; rows = devs.filter(function (d) { return d.status !== 'online'; }); }
+    else                         { title = 'All routers';     rows = devs.slice(); }
+
+    $('#listTitle').textContent = title;
+    $('#listSub').textContent = rows.length + ' of ' + devs.length + ' router' + (devs.length === 1 ? '' : 's');
+    $('#listBody').innerHTML = rows.length
+      ? rows.map(function (d) {
+          var pill = d.status === 'online'
+            ? '<span class="pill pill-on"><span class="d"></span>Online</span>'
+            : d.status === 'disabled'
+              ? '<span class="pill pill-dis"><span class="d"></span>Disabled</span>'
+              : '<span class="pill pill-off"><span class="d"></span>Offline</span>';
+          // For an offline router the reason is the useful part, so it is shown
+          // here rather than made him hunt for the card.
+          var why = d.status === 'online'
+            ? '<span class="mono">' + bps(d.downloadBps) + ' down &middot; ' + bps(d.uploadBps) + ' up</span>'
+            : '<span class="lrow-err">' + esc(d.error || (d.status === 'disabled' ? 'Monitoring disabled' : 'Not reachable')) + '</span>';
+          return '<div class="lrow"><div class="lrow-main">'
+            + '<div class="lrow-name">' + esc(d.name) + '</div>'
+            + '<div class="lrow-meta mono">' + esc(d.host) + ':' + d.apiPort
+            + (d.location ? ' &middot; ' + esc(d.location) : '') + '</div>'
+            + '<div class="lrow-meta">' + why + '</div>'
+            + '</div><div>' + pill + '</div></div>';
+        }).join('')
+      : '<div class="lrow"><div class="lrow-main"><div class="lrow-meta">Nothing in this list right now.</div></div></div>';
+    open('#listModal');
   }
 
   function deviceCard(d) {
@@ -268,9 +315,12 @@
                   : '<span class="lat lat-bad mono">N/A</span>'))
       + '</div><div class="cs" title="' + esc(d.connStatus) + '">' + esc(d.connStatus) + '</div></div>'
 
+      // ids so the once-a-second live tick can rewrite just these two numbers.
+      // Re-rendering the whole card at that rate would flicker and would drop
+      // whatever the mouse was over.
       + '<div class="speeds">'
-      +   '<div class="speed speed-dl"><div class="k">' + svg('down') + 'Download</div><div class="v mono">' + bps(d.downloadBps) + '</div></div>'
-      +   '<div class="speed speed-ul"><div class="k">' + svg('up') + 'Upload</div><div class="v mono">' + bps(d.uploadBps) + '</div></div>'
+      +   '<div class="speed speed-dl"><div class="k">' + svg('down') + 'Download</div><div class="v mono" id="dl-' + d.id + '">' + bps(d.downloadBps) + '</div></div>'
+      +   '<div class="speed speed-ul"><div class="k">' + svg('up') + 'Upload</div><div class="v mono" id="ul-' + d.id + '">' + bps(d.uploadBps) + '</div></div>'
       + '</div>'
 
       + '<div class="gauge"><div class="row"><span>' + svg('cpu') + 'CPU usage</span><b>' + (on ? d.cpu + '%' : '-') + '</b></div>'
@@ -283,7 +333,7 @@
       +   '<div class="mini"><span class="k">Hotspot active</span><span class="v v-amber">' + svg('users') + (on ? d.hotspotUsers : 0) + '</span></div>'
       +   '<div class="mini"><span class="k">PPPoE active</span><span class="v v-indigo">' + svg('users') + (on ? d.pppoeUsers : 0) + '</span></div>'
       +   '<div class="mini"><span class="k">Uptime</span><span class="v v-ink" style="font-size:12px">' + svg('clock') + (on ? esc(d.uptime || '-') : 'Offline') + '</span></div>'
-      +   '<div class="mini"><span class="k">Traffic measured</span><span class="v v-ink" style="font-size:12px">' + bytes(d.trafficBytes) + '</span></div>'
+      +   '<div class="mini"><span class="k">Traffic measured</span><span class="v v-ink" style="font-size:12px" id="tb-' + d.id + '">' + bytes(d.trafficBytes) + '</span></div>'
       + '</div>'
 
       + '<div class="dev-ft"><div class="seen">'
@@ -387,7 +437,8 @@
       $('#devSub').textContent = d.devices.length
         ? d.summary.onlineDevices + ' of ' + d.summary.totalDevices + ' reachable, last checked ' + ago(d.lastPoll)
         : 'No routers configured yet.';
-      $('#chartSub').textContent = 'Combined traffic across every monitored router, one point per poll.';
+      $('#chartSub').textContent = 'Combined traffic across every monitored router, '
+        + (d.liveLane ? 'one point per second, straight from the routers.' : 'one point per poll.');
 
       lastPoints = d.history || [];
       drawChart('#chart', lastPoints);
@@ -399,6 +450,58 @@
     state.timer = setTimeout(function () {
       refresh().then(loop, loop);
     }, Math.max(2, state.uiRefresh) * 1000);
+  }
+
+  /* ------------------------------------------------------------- live tick
+     The bandwidth lane writes a new reading every second. This asks only for
+     those numbers and writes them straight into the existing elements, so the
+     figure moves once a second without rebuilding the page - which is what the
+     full refresh above does on its slower clock. */
+  function setText(id, txt) { var el = document.getElementById(id); if (el && el.textContent !== txt) el.textContent = txt; }
+
+  function liveTick() {
+    return api('live').then(function (d) {
+      if (!d || !d.success) return;
+      var s = d.summary;
+      state.liveLane = !!d.liveLane;
+
+      setText('tv-dl', bps(s.totalDownloadBps));
+      setText('tv-ul', bps(s.totalUploadBps));
+      setText('tv-bw', bps(s.totalBandwidthBps));
+      setText('tv-hs', Number(s.totalHotspotUsers || 0).toLocaleString());
+      var hsFoot = document.getElementById('tf-hs');
+      if (hsFoot) hsFoot.innerHTML = '<b>' + (s.totalPppoeUsers || 0) + '</b> PPPoE sessions';
+
+      (d.devices || []).forEach(function (x) {
+        setText('dl-' + x.id, bps(x.downloadBps));
+        setText('ul-' + x.id, bps(x.uploadBps));
+        setText('tb-' + x.id, bytes(x.trafficBytes));
+        // Keep the copy the device-list modal reads in step, so opening it does
+        // not show speeds from the last full refresh.
+        for (var i = 0; i < state.devices.length; i++) {
+          if (state.devices[i].id === x.id) {
+            state.devices[i].downloadBps = x.downloadBps;
+            state.devices[i].uploadBps   = x.uploadBps;
+          }
+        }
+      });
+
+      var pl = $('#pollLabel');
+      if (pl) pl.textContent = d.liveLane ? 'live, every 1s' : 'every ' + state.pollSeconds + 's';
+
+      lastPoints = d.history || lastPoints;
+      drawChart('#chart', lastPoints);
+    });
+  }
+
+  function liveLoop() {
+    clearTimeout(state.liveTimer);
+    state.liveTimer = setTimeout(function () {
+      // Nothing to update while the tab is in the background, and a phone left on
+      // the dashboard would otherwise keep asking once a second all night.
+      if (document.hidden) { liveLoop(); return; }
+      liveTick().then(liveLoop, liveLoop);
+    }, 1000);
   }
 
   var rt;
@@ -424,6 +527,9 @@
     var closeBtn = e.target.closest('[data-close]');
     if (closeBtn) { close('#' + closeBtn.closest('.ovl').id); return; }
     if (e.target.classList && e.target.classList.contains('ovl')) { close('#' + e.target.id); return; }
+
+    var listTile = e.target.closest('.tile-click');
+    if (listTile) { openDeviceList(listTile.getAttribute('data-list')); return; }
 
     var b = e.target.closest('button');
     if (!b) return;
@@ -501,6 +607,7 @@
       f.poll_seconds.value    = r.settings.poll_seconds;
       f.net_ping_target.value = r.settings.net_ping_target;
       f.net_ping_every.value  = r.settings.net_ping_every;
+      f.live_bandwidth.checked = !!r.settings.live_bandwidth;
       open('#settingsModal');
     });
   }
@@ -511,7 +618,7 @@
     api('settings_save', {
       site_name: f.site_name.value, site_tagline: f.site_tagline.value,
       poll_seconds: f.poll_seconds.value, net_ping_target: f.net_ping_target.value,
-      net_ping_every: f.net_ping_every.value
+      net_ping_every: f.net_ping_every.value, live_bandwidth: f.live_bandwidth.checked
     }).then(function (r) {
       if (!r.success) { showResult('#settingsResult', false, r.message); return; }
       close('#settingsModal');
@@ -614,4 +721,5 @@
 
   checkDbExposed();
   refresh().then(loop, loop);
+  liveLoop();
 })();

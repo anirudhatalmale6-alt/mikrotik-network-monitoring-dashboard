@@ -225,6 +225,9 @@ function mt_asset($rel) {
           <div class="f full"><label>Run that ping every (seconds)</label>
             <input type="number" name="net_ping_every" min="10" max="3600">
             <span class="hint">Each ping costs the router about a second, so it runs on a slower clock than the rest.</span></div>
+          <div class="f full"><label class="f-check"><input type="checkbox" name="live_bandwidth"> Live bandwidth (one reading per second)</label>
+            <span class="hint">Keeps one connection open per router and reads its own traffic monitor, the same
+              source as the WinBox graph. Turn this off to fall back to the poll interval above.</span></div>
         </div>
         <div class="result" id="settingsResult"></div>
       </div>
@@ -233,6 +236,18 @@ function mt_asset($rel) {
         <button type="submit" class="btn btn-primary">Save settings</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- ------------------------------------------------- which routers are in this count -->
+<div class="ovl" id="listModal">
+  <div class="modal">
+    <div class="modal-hd">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></div>
+      <div><h3 id="listTitle">Routers</h3><p id="listSub"></p></div>
+    </div>
+    <div class="modal-bd"><div class="lrows" id="listBody"></div></div>
+    <div class="modal-ft"><button type="button" class="btn btn-slate" data-close>Close</button></div>
   </div>
 </div>
 

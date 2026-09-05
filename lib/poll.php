@@ -198,9 +198,14 @@ function mt_poll_device(PDO $db, array $dev) {
         $freeMem  = (int)($r['free-memory'] ?? 0);
         $ramPct   = $totalMem > 0 ? (int)round(($totalMem - $freeMem) / $totalMem * 100) : 0;
 
-        $identity = '';
-        try { $id = $ros->query('/system/identity/print'); $identity = (string)($id[0]['name'] ?? ''); }
-        catch (Exception $e) { /* identity is cosmetic */ }
+        // Identity is cosmetic and costs a whole round trip - half a second on these
+        // routers. Read it the first time and then leave it to the slow lane below,
+        // rather than paying for it on every single poll.
+        $identity = (string)($prev['identity'] ?? '');
+        if ($identity === '') {
+            try { $id = $ros->query('/system/identity/print'); $identity = (string)($id[0]['name'] ?? ''); }
+            catch (Exception $e) { /* keep the stored one */ }
+        }
 
         // A router without a hotspot or without PPP is normal, not a fault.
         $hotspot = 0;
@@ -258,9 +263,20 @@ function mt_poll_device(PDO $db, array $dev) {
             list($netMs, $netErr) = mt_router_ping($ros, $target);
             $netTarget = $target;
             $netAt = $now;
+            // Same slow clock: catch a router that has been renamed, without paying
+            // for the question on every poll.
+            try { $id = $ros->query('/system/identity/print'); $identity = (string)($id[0]['name'] ?? $identity); }
+            catch (Exception $e) {}
         }
 
         $conn = 'Connected (RouterOS API' . (isset($r['version']) && $r['version'] !== '' ? ' ' . explode(' ', $r['version'])[0] : '') . ')';
+
+        // If the live lane is streaming this router's speed once a second, its
+        // figure is newer than anything derived here from two counters taken poll
+        // interval apart. Writing ours would make the number jump backwards to an
+        // older average every time the slow poll came round.
+        $liveLane = mt_bw_alive($db);
+        if ($liveLane) { $rxBps = (int)$prev['rx_bps']; $txBps = (int)$prev['tx_bps']; }
 
         $db->prepare("UPDATE status SET online=1, error='', conn_status=?, ping_ms=?, ping_source=?,
                         cpu=?, ram_pct=?, ram_total_mb=?, ram_free_mb=?, uptime=?, ros_version=?, board=?,
@@ -285,7 +301,7 @@ function mt_poll_device(PDO $db, array $dev) {
             $db->prepare("UPDATE devices SET ros_version=? WHERE id=?")->execute([(string)$r['version'], $dev['id']]);
         }
 
-        if ($rxBps > 0 || $txBps > 0 || $moved > 0) {
+        if (!$liveLane && ($rxBps > 0 || $txBps > 0 || $moved > 0)) {
             $db->prepare("INSERT INTO samples (device_id, ts, rx_bps, tx_bps) VALUES (?,?,?,?)")
                ->execute([$dev['id'], $nowTs, $rxBps, $txBps]);
         }
@@ -313,16 +329,31 @@ function mt_poll_all(PDO $db, $verbose = false) {
                    $r['error'] !== '' ? '  (' . $r['error'] . ')' : '');
         }
     }
+
+    // The combined graph point. The lane writes its own once a second; this is the
+    // fallback for a host where the lane cannot run, so the chart is never empty.
+    if (!mt_bw_alive($db)) {
+        $t = $db->query("SELECT COALESCE(SUM(rx_bps),0) rx, COALESCE(SUM(tx_bps),0) tx
+                           FROM status s JOIN devices d ON d.id=s.device_id
+                          WHERE s.online=1 AND d.enabled=1")->fetch();
+        $db->prepare("INSERT INTO totals (ts, rx_bps, tx_bps) VALUES (?,?,?)
+                      ON CONFLICT(ts) DO UPDATE SET rx_bps=excluded.rx_bps, tx_bps=excluded.tx_bps")
+           ->execute([time(), (int)$t['rx'], (int)$t['tx']]);
+    }
+
     mt_trim_history($db);
     return count($devs);
 }
 
 /** Keep the graph history bounded - this runs forever on a small server. */
 function mt_trim_history(PDO $db) {
-    $keep = max(30, (int)mt_setting('history_points', 120));
-    $poll = max(5, (int)mt_setting('poll_seconds', 10));
-    $cutoff = time() - ($keep * $poll) - 60;
+    $keep = max(30, (int)mt_setting('history_points', 180));
+    // The lane produces a point per second; the ordinary poll one per interval.
+    // Size the window for whichever is actually filling the table.
+    $step = mt_bw_alive($db) ? 1 : max(5, (int)mt_setting('poll_seconds', 10));
+    $cutoff = time() - ($keep * $step) - 60;
     $db->prepare("DELETE FROM samples WHERE ts < ?")->execute([$cutoff]);
+    $db->prepare("DELETE FROM totals  WHERE ts < ?")->execute([$cutoff]);
 }
 
 /**

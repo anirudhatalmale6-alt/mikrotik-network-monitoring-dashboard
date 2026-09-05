@@ -108,6 +108,17 @@ function mt_schema(PDO $db) {
     $db->exec("CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts)");
     $db->exec("CREATE INDEX IF NOT EXISTS idx_samples_dev ON samples(device_id, ts)");
 
+    // The combined graph, one row per second, written by whichever process is
+    // producing the live figures. Summing the per-device samples by timestamp
+    // instead would dip every time a router happened to report on a different
+    // second from its neighbour.
+    $db->exec("
+    CREATE TABLE IF NOT EXISTS totals (
+        ts     INTEGER PRIMARY KEY,
+        rx_bps INTEGER NOT NULL DEFAULT 0,
+        tx_bps INTEGER NOT NULL DEFAULT 0
+    )");
+
     $db->exec("
     CREATE TABLE IF NOT EXISTS admins (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,6 +139,9 @@ function mt_schema(PDO $db) {
         'net_ping_target' => "TEXT NOT NULL DEFAULT ''",
         'net_ping_at'     => 'TEXT',
         'net_ping_err'    => "TEXT NOT NULL DEFAULT ''",
+        // When the live bandwidth lane last wrote this row. Lets the ordinary poll
+        // tell whether someone faster is already keeping rx_bps up to date.
+        'bw_at'           => 'TEXT',
     ]);
 
     $defaults = [
@@ -138,7 +152,11 @@ function mt_schema(PDO $db) {
         // from the router's point of view as well as reachability from this server.
         'net_ping_target'=> '8.8.8.8',
         'net_ping_every' => '30',    // seconds; /ping costs about a second per packet
-        'history_points' => '120',   // points kept per device for the live graph
+        'history_points' => '180',   // points kept per device for the live graph
+        // Live bandwidth straight from the router's own traffic monitor, one reading
+        // per second. Off means bandwidth comes from the ordinary poll instead, which
+        // is as slow as the poll interval.
+        'live_bandwidth' => '1',
         'api_timeout'    => '6',
     ];
     $ins = $db->prepare("INSERT OR IGNORE INTO settings (k, v) VALUES (?, ?)");
@@ -188,6 +206,19 @@ function mt_setting_now(PDO $db, $key, $default = '') {
     $st->execute([$key]);
     $v = $st->fetchColumn();
     return ($v === false || $v === null || $v === '') ? $default : $v;
+}
+
+/**
+ * Is the live bandwidth lane running right now?
+ *
+ * It writes a heartbeat every second. Anything that would otherwise write rx_bps
+ * asks this first, so a slow poll cannot overwrite a newer figure with an older
+ * average. Lives here rather than in bwlane.php so the poller can ask without
+ * pulling in the lane.
+ */
+function mt_bw_alive(PDO $db, $withinSeconds = 8) {
+    $hb = (int)mt_setting_now($db, 'bw_alive', 0);
+    return $hb > 0 && (time() - $hb) <= $withinSeconds;
 }
 
 /** The poller runs for weeks; without this it would never notice a setting change. */

@@ -109,6 +109,41 @@ class RouterOs
         return $rows;
     }
 
+    /**
+     * Start a command that keeps reporting until the connection is closed, e.g.
+     * /interface/monitor-traffic without =once=. The router then pushes one !re
+     * sentence per second by itself, so a live figure costs no request at all -
+     * which is the only way to show a real-time rate on a link with a 200 ms
+     * round trip.
+     *
+     * Nothing is read here: use readable() and readNext() to collect the updates.
+     */
+    public function startStream($command, array $args = []) {
+        foreach (array_merge([$command], $args) as $w) $this->writeWord($w);
+        $this->writeWord('');
+    }
+
+    /** True when the router has already sent something. Never blocks longer than
+     *  $seconds, so one slow router cannot stall the others. */
+    public function readable($seconds = 1) {
+        if (!$this->sock) return false;
+        $r = [$this->sock]; $w = null; $e = null;
+        $sec = (int)$seconds;
+        $usec = (int)(($seconds - $sec) * 1000000);
+        $n = @stream_select($r, $w, $e, $sec, $usec);
+        return $n > 0;
+    }
+
+    /** Read one sentence from a stream started with startStream(). */
+    public function readNext() {
+        $s = $this->readSentence();
+        if ($s === null) throw new RouterOsException('connection closed by router');
+        if ($s['type'] === '!fatal') throw new RouterOsException('router closed the stream');
+        return $s;
+    }
+
+    public function isOpen() { return is_resource($this->sock); }
+
     /** Send one sentence, read sentences until !done. */
     private function talk(array $words) {
         foreach ($words as $w) $this->writeWord($w);

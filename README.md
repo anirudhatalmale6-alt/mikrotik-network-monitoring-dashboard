@@ -20,7 +20,11 @@ active hotspot users, active PPPoE users, download and upload speed, traffic
 measured, last seen, and the connection status.
 
 **Real-time bandwidth graph** - combined download and upload over time, one point
-per poll, with a hover readout.
+per second while the live lane is running, with a hover readout.
+
+**Click a count to see what it is made of** - the Online, Offline and Total
+devices tiles open a list of exactly which routers they mean, with the reason
+next to any router that is down.
 
 **Admin panel** - sign in from the button at the top right, then add, edit,
 delete, enable and disable routers, poll one on demand, and change the admin
@@ -114,14 +118,50 @@ systemctl daemon-reload && systemctl enable --now mikrotik-monitor
 
 Command line:
 ```sh
-php poller.php --once -v     # one round, printing what each router answered
-php poller.php --loop        # what the service runs
+php poller.php --once -v            # one round, printing what each router answered
+php poller.php --loop               # what the poller service runs
+php poller.php --bw --seconds=0     # what the live bandwidth service runs
+php poller.php --bw --seconds=60 -v # watch the live lane for a minute
+```
+
+## Live bandwidth, once per second
+
+The ordinary poll cannot produce a live speed. It opens a connection to each
+router, logs in and asks six questions, and every one of those is a round trip:
+measured against three routers on the far side of the internet, one full poll of
+one router takes 4-6 seconds and a round over all three takes about sixteen. No
+amount of refreshing the browser changes that - the delay is on the wire.
+
+So bandwidth is taken off that clock. The **live lane** keeps one connection open
+per router and runs `/interface/monitor-traffic` without `=once=`, the same source
+the WinBox traffic graph uses. After that single command there is nothing left to
+ask for: the router pushes a new reading every second by itself, so the figure
+updates once a second however far away the router is.
+
+- Everything else - CPU, RAM, users, uptime, ping - stays with the ordinary
+  poller, in its own process. A slow full poll can never stall the live numbers.
+- The page asks for the live figures on their own one-second endpoint and writes
+  them into the existing elements, so nothing else on the page is rebuilt.
+- The lane only opens connections to routers the poller has just reached. Dialling
+  a router that does not answer is what would put holes in the graph.
+- With no service installed the dashboard starts the lane itself while the page is
+  open, and it exits on its own a few minutes after the last visitor leaves.
+- Turn it off in **Settings** and bandwidth falls back to the poll interval.
+
+On a server you control, run it as a service so the graph fills in unattended -
+`mikrotik-monitor-bw.service` is included:
+
+```sh
+cp mikrotik-monitor-bw.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now mikrotik-monitor-bw
 ```
 
 ## How the numbers are produced
 
-- **Speed** comes from the interface byte counters, read twice. Two readings and
-  the time between them give a rate.
+- **Speed** is the router's own per-second traffic monitor when the live lane is
+  running. Without it, speed comes from the interface byte counters read twice:
+  two readings and the time between them give a rate. Both were checked against
+  each other on live links and agree to within about a tenth.
 - **One interface per router.** A MikroTik counts the same packet on the bridge,
   on the member port and on the WAN port, so adding every interface up reports
   several times the real throughput. The internet-facing interface is detected
@@ -156,6 +196,7 @@ api.php             JSON endpoints (summary, CRUD, auth, test connection)
 poller.php          command line poller
 lib/routeros.php    RouterOS API client (pure PHP, no extensions)
 lib/poll.php        reads one router and stores the result
+lib/bwlane.php      the live bandwidth lane (one reading per second)
 lib/db.php          SQLite schema, created automatically
 lib/auth.php        admin login (bcrypt)
 lib/helpers.php     formatting

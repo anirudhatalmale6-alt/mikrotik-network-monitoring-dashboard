@@ -12,6 +12,7 @@
 define('MT_JSON', true);   // preflight answers JSON rather than an HTML page
 require_once __DIR__ . '/lib/db.php';
 require_once __DIR__ . '/lib/poll.php';
+require_once __DIR__ . '/lib/bwlane.php';
 require_once __DIR__ . '/lib/auth.php';
 require_once __DIR__ . '/lib/helpers.php';
 
@@ -98,10 +99,63 @@ function mt_maybe_poll(PDO $db) {
     mt_unlock($lock);
 }
 
+/** The combined graph, newest last. */
+function mt_history(PDO $db) {
+    $keep = max(30, (int)mt_setting('history_points', 180));
+    $rows = $db->query("SELECT ts, rx_bps rx, tx_bps tx FROM totals
+                         ORDER BY ts DESC LIMIT " . (int)$keep)->fetchAll();
+    // Older installations have history in `samples` only, so fall back to summing
+    // those rather than showing an empty chart after an upgrade.
+    if (!$rows) {
+        $rows = $db->query("SELECT ts, SUM(rx_bps) rx, SUM(tx_bps) tx FROM samples
+                             GROUP BY ts ORDER BY ts DESC LIMIT " . (int)$keep)->fetchAll();
+    }
+    $out = [];
+    foreach (array_reverse($rows) as $h) {
+        $out[] = ['ts' => (int)$h['ts'], 'rx' => (int)$h['rx'], 'tx' => (int)$h['tx']];
+    }
+    return $out;
+}
+
 switch ($action) {
+
+    // ------------------------------------------------------- live figures only
+    // Small and cheap on purpose: the page asks for this every second to move the
+    // bandwidth numbers, and asks for the full summary on a slower clock. Sending
+    // everything once a second would rebuild the whole page each time.
+    case 'live':
+        if (mt_setting('live_bandwidth', '1') === '1') mt_maybe_bw($db);
+        mt_maybe_poll($db);
+
+        $rows = $db->query("SELECT s.device_id, s.online, s.rx_bps, s.tx_bps, s.hotspot_users,
+                                   s.ppp_users, s.traffic_bytes
+                              FROM status s JOIN devices d ON d.id = s.device_id
+                             WHERE d.enabled = 1")->fetchAll();
+        $tot = ['totalDownloadBps' => 0, 'totalUploadBps' => 0, 'totalHotspotUsers' => 0,
+                'totalPppoeUsers' => 0, 'onlineDevices' => 0];
+        $devs = [];
+        foreach ($rows as $r) {
+            $on = (int)$r['online'] === 1;
+            if ($on) {
+                $tot['onlineDevices']++;
+                $tot['totalDownloadBps']  += (int)$r['rx_bps'];
+                $tot['totalUploadBps']    += (int)$r['tx_bps'];
+                $tot['totalHotspotUsers'] += (int)$r['hotspot_users'];
+                $tot['totalPppoeUsers']   += (int)$r['ppp_users'];
+            }
+            $devs[] = ['id' => (int)$r['device_id'], 'online' => $on,
+                       'downloadBps' => $on ? (int)$r['rx_bps'] : 0,
+                       'uploadBps'   => $on ? (int)$r['tx_bps'] : 0,
+                       'trafficBytes'=> (int)$r['traffic_bytes']];
+        }
+        $tot['totalBandwidthBps'] = $tot['totalDownloadBps'] + $tot['totalUploadBps'];
+        mt_out(['success' => true, 'summary' => $tot, 'devices' => $devs,
+                'history' => mt_history($db), 'liveLane' => mt_bw_alive($db)]);
+        break;
 
     // -------------------------------------------------------------- dashboard
     case 'summary':
+        if (mt_setting('live_bandwidth', '1') === '1') mt_maybe_bw($db);
         mt_maybe_poll($db);
 
         $rows = $db->query("
@@ -171,17 +225,9 @@ switch ($action) {
         }
         $summary['totalBandwidthBps'] = $summary['totalDownloadBps'] + $summary['totalUploadBps'];
 
-        // Combined history: samples taken in one poll share a timestamp, so grouping
-        // by it lines the routers up without interpolating anything.
-        $keep = max(30, (int)mt_setting('history_points', 120));
-        $hist = $db->query("SELECT ts, SUM(rx_bps) rx, SUM(tx_bps) tx FROM samples
-                             GROUP BY ts ORDER BY ts DESC LIMIT " . (int)$keep)->fetchAll();
-        $history = [];
-        foreach (array_reverse($hist) as $h) {
-            $history[] = ['ts' => (int)$h['ts'], 'rx' => (int)$h['rx'], 'tx' => (int)$h['tx']];
-        }
-
-        $newest = $db->query("SELECT MAX(last_try) FROM status")->fetchColumn();
+        $history = mt_history($db);
+        $newest  = $db->query("SELECT MAX(last_try) FROM status")->fetchColumn();
+        $liveLane = mt_bw_alive($db);
         mt_out([
             'success'    => true,
             'summary'    => $summary,
@@ -194,6 +240,10 @@ switch ($action) {
             // same clock as the poll always shows the previous round's numbers and
             // updates half as often as it should.
             'uiRefresh'  => max(2, min(5, (int)mt_setting('poll_seconds', 5))),
+            // Bandwidth comes from the router's own traffic monitor, which reports
+            // every second, so the page reads the small live endpoint on that clock.
+            'liveLane'   => $liveLane,
+            'liveRefresh'=> 1,
             'lastPoll'   => $newest,
             // True when nothing has polled recently: the page says so instead of
             // letting old numbers pass for live ones.
@@ -310,6 +360,7 @@ switch ($action) {
             'poll_seconds'    => (int)mt_setting('poll_seconds', 5),
             'net_ping_target' => mt_setting('net_ping_target', '8.8.8.8'),
             'net_ping_every'  => (int)mt_setting('net_ping_every', 30),
+            'live_bandwidth'  => mt_setting('live_bandwidth', '1') === '1',
         ]]);
         break;
 
@@ -326,6 +377,7 @@ switch ($action) {
         mt_set_setting('poll_seconds',    (string)max(3, min(300, (int)($b['poll_seconds'] ?? 5))));
         mt_set_setting('net_ping_target', $tgt !== '' ? substr($tgt, 0, 64) : '8.8.8.8');
         mt_set_setting('net_ping_every',  (string)max(10, min(3600, (int)($b['net_ping_every'] ?? 30))));
+        mt_set_setting('live_bandwidth',  !empty($b['live_bandwidth']) ? '1' : '0');
         mt_out(['success' => true, 'message' => 'Settings saved.']);
         break;
 
@@ -491,7 +543,7 @@ switch ($action) {
 
     case 'device_history':
         $id = (int)($_GET['id'] ?? 0);
-        $keep = max(30, (int)mt_setting('history_points', 120));
+        $keep = max(30, (int)mt_setting('history_points', 180));
         $st = $db->prepare("SELECT ts, rx_bps rx, tx_bps tx FROM samples WHERE device_id=?
                              ORDER BY ts DESC LIMIT " . (int)$keep);
         $st->execute([$id]);

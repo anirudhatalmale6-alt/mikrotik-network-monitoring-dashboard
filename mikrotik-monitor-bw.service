@@ -1,0 +1,34 @@
+# Live bandwidth lane.
+#
+# Optional. Without it the dashboard starts the lane itself whenever the page is
+# open, which is all that shared hosting allows; as a service the graph also keeps
+# filling in while nobody is looking.
+#
+#   cp mikrotik-monitor-bw.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now mikrotik-monitor-bw
+#
+# Runs alongside mikrotik-monitor.service on purpose: bandwidth must answer every
+# second, and a full poll of several routers takes far longer than that.
+
+[Unit]
+Description=MikroTik Network Monitoring Dashboard - live bandwidth lane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# --seconds=0 means "until stopped".
+ExecStart=/usr/bin/php /var/www/mikrotik-monitor/poller.php --bw --seconds=0
+User=www-data
+Group=www-data
+Restart=always
+RestartSec=5
+StandardOutput=null
+StandardError=journal
+SyslogIdentifier=mikrotik-monitor-bw
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
