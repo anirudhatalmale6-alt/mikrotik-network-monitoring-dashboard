@@ -123,18 +123,18 @@ function mt_live_why(PDO $db, $deviceCount) {
                                 WHERE d.enabled=1 AND s.online=1")->fetchColumn();
     if ($online === 0) return 'No router is reachable yet, so there is nothing to stream.';
     if (mt_setting_now($db, 'php_cli', '') === 'none' || mt_bw_spawn_broken($db)) {
-        $why = mt_bw_spawn_broken($db)
-            ? mt_setting_now($db, 'bw_spawn_why', 'this host stops the background process straight away')
-            : mt_setting_now($db, 'php_cli_why', 'this host does not allow starting a background process');
-        // The fallback is already running in this request, so say what IS happening
-        // before saying what would be better - the figures are not stuck at the poll
-        // interval any more, they are just costing a round trip each.
-        return 'Streaming needs a background process and ' . $why . ', so the figures are being '
-             . 'read directly on each refresh instead - about a second per router. To get the full '
-             . 'once-a-second stream, run the lane from cron: '
-             . '* * * * * php ' . MT_ROOT . '/poller.php --bw --seconds=60';
+        // Do NOT send anyone to cron here. This host cannot run a background process,
+        // but the page can hold the stream open itself - that is the once-a-second
+        // path on exactly these hosts, and it connects a moment after the page loads.
+        // Telling him to set up a cron job he does not need is worse than saying
+        // nothing: it is work, on the strength of a message that is about to stop
+        // being true.
+        return 'This host will not run a background process, so the page reads the figures itself. '
+             . 'It switches to the once-a-second stream as soon as the connection is established - '
+             . 'if this message is still here after a few seconds, the stream is being blocked and '
+             . 'each reading costs about a second per router instead.';
     }
-    return 'Starting...';
+    return 'Connecting the live stream...';
 }
 
 /** The combined graph, newest last. */

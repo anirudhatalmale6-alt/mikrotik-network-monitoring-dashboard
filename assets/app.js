@@ -5,7 +5,7 @@
   'use strict';
 
   var state = { csrf: '', isAdmin: false, devices: [], pollSeconds: 5, uiRefresh: 3,
-                timer: null, liveTimer: null, liveLane: false, liveMode: 'poll', deleteId: 0 };
+                timer: null, liveTimer: null, liveLane: false, liveMode: 'poll', nonStream: 0, deleteId: 0 };
   var $  = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
@@ -378,7 +378,11 @@
     }
     // Not an error - it is the normal state of a fresh install, and saying so beats
     // leaving someone staring at empty tiles wondering what went wrong.
-    if (!d.stale && d.devices.length && d.liveMode !== 'stream' && d.liveWhy) {
+    // Only once it has clearly settled. The stream takes a moment to connect after
+    // the page loads, and during that moment the server correctly reports the slower
+    // mode - announcing it straight away meant telling him something was wrong a
+    // second before it started working.
+    if (!d.stale && d.devices.length && d.liveWhy && !stream.ok && state.nonStream >= 3) {
       out += '<div class="notice notice-info">' + svg('bolt')
         + '<div><b>' + (d.liveMode === 'direct'
             ? 'Bandwidth is being read on every refresh.'
@@ -441,7 +445,10 @@
       renderTiles(d.summary);
       renderDevices(d.devices);
 
-      state.liveMode = d.liveMode || 'poll';
+      // The stream, once it is delivering, is the truth about this page - the
+      // server's view can lag it by a refresh.
+      state.liveMode = stream.ok ? 'stream' : (d.liveMode || 'poll');
+      state.nonStream = state.liveMode === 'stream' ? 0 : (state.nonStream + 1);
       $('#pollLabel').textContent = liveLabel(state.liveMode);
       // A bare "every 5s" reads like the live figures never arrived. Say what is
       // actually happening instead, on the pill itself.
