@@ -300,6 +300,17 @@ a { color: var(--indigo); }
 .result.ok { background: var(--emerald-l); border-color: #a7f3d0; color: #065f46; }
 .result.bad { background: var(--rose-l); border-color: #fecdd3; color: #9f1239; }
 
+/* ---------------------------------------------------------- backup section */
+.bk { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.bk h4 { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
+.bk .hint { display: block; }
+.bk-row { display: flex; flex-wrap: wrap; gap: 9px; margin: 12px 0 8px; }
+/* The file input is hidden and driven by its label, so the two ways in look the
+   same as every other button on the page. */
+.bk-row label.btn { cursor: pointer; margin: 0; font-size: 13px; }
+.bk-warn { color: var(--amber); font-weight: 500; }
+#restoreName:empty { display: none; }
+
 /* ------------------------------------------------------------------ toasts */
 .toasts { position: fixed; right: 18px; bottom: 18px; z-index: 200; display: flex; flex-direction: column; gap: 9px; }
 .toast {

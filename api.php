@@ -480,6 +480,181 @@ switch ($action) {
                 'message' => 'Database moved to ' . $target . ', outside the web root. Reload the page.']);
         break;
 
+    // ------------------------------------------------------- backup / restore
+    //
+    // A backup of THIS installation only: the routers that were typed in, the
+    // settings, and the admin logins. Deliberately not the history - samples and
+    // totals are thousands of rows a day and none of it is anything you would have
+    // to type again. What this file protects is the part that is expensive to lose.
+    case 'backup':
+        mt_require_admin();
+
+        $devs = $db->query(
+            "SELECT name, host, api_port, username, password, location, description,
+                    enabled, wan_iface, sort_order
+               FROM devices ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+
+        // Whitelist, not blacklist. The settings table also holds bookkeeping the
+        // lane writes to itself (heartbeats, dispatch markers, the cached path to
+        // the PHP binary); carrying those to another host would tell the new
+        // install things about the old one that are not true there.
+        $keep = ['site_name', 'site_tagline', 'poll_seconds', 'net_ping_target',
+                 'net_ping_every', 'history_points', 'live_bandwidth', 'api_timeout'];
+        $settings = [];
+        foreach ($keep as $k) {
+            $v = mt_setting_now($db, $k, null);
+            if ($v !== null) $settings[$k] = (string)$v;
+        }
+
+        $admins = $db->query("SELECT username, password_hash FROM admins ORDER BY id")
+                     ->fetchAll(PDO::FETCH_ASSOC);
+
+        $out = [
+            'format'   => 'mikrotik-monitor-backup',
+            'version'  => 1,
+            'created'  => gmdate('c'),
+            'site'     => (string)($_SERVER['HTTP_HOST'] ?? ''),
+            'counts'   => ['devices' => count($devs), 'admins' => count($admins)],
+            'settings' => $settings,
+            'devices'  => $devs,
+            'admins'   => $admins,
+        ];
+
+        $name = preg_replace('/[^a-z0-9.-]+/i', '-', (string)($_SERVER['HTTP_HOST'] ?? 'monitor'));
+        $file = 'monitor-backup-' . trim($name, '-') . '-' . gmdate('Y-m-d') . '.json';
+        $json = json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $file . '"');
+        header('Content-Length: ' . strlen($json));
+        echo $json;
+        exit;
+
+    case 'restore':
+        mt_guard();
+
+        // Accepts either an uploaded file (the normal route) or the text pasted
+        // into the request body, so a restore is still possible on a host where
+        // file uploads are switched off.
+        $raw = '';
+        if (!empty($_FILES['file']['tmp_name']) && is_uploaded_file($_FILES['file']['tmp_name'])) {
+            $raw = (string)@file_get_contents($_FILES['file']['tmp_name']);
+        } else {
+            $raw = (string)(mt_body()['backup'] ?? '');
+        }
+        if (trim($raw) === '') {
+            mt_out(['success' => false, 'message' => 'No backup file was received.'], 400);
+        }
+
+        $in = json_decode($raw, true);
+        if (!is_array($in) || ($in['format'] ?? '') !== 'mikrotik-monitor-backup') {
+            mt_out(['success' => false, 'message' => 'That is not a backup file from this dashboard.'], 400);
+        }
+        if (!isset($in['devices']) || !is_array($in['devices'])) {
+            mt_out(['success' => false, 'message' => 'The backup file has no router list in it.'], 400);
+        }
+
+        // Refuse an empty restore rather than quietly wiping a working install:
+        // the most likely cause is a truncated download, and by the time anyone
+        // noticed, the routers it was meant to protect would already be gone.
+        if (count($in['devices']) === 0) {
+            mt_out(['success' => false, 'message' => 'The backup contains no routers, so nothing was changed.'], 400);
+        }
+
+        $me = mt_admin_name();
+        $db->beginTransaction();
+        try {
+            // Replace the router list wholesale. Rows in `status` and `samples`
+            // reference devices(id) and foreign keys are on for every connection
+            // (see mt_db), so the delete carries the readings of the old routers
+            // with it rather than leaving them behind pointing at nothing.
+            $db->exec('DELETE FROM devices');
+
+            $ins = $db->prepare(
+                "INSERT INTO devices (name, host, api_port, username, password, location,
+                                      description, enabled, wan_iface, sort_order)
+                 VALUES (?,?,?,?,?,?,?,?,?,?)");
+            $n = 0;
+            foreach ($in['devices'] as $d) {
+                if (!is_array($d)) continue;
+                $dname = trim((string)($d['name'] ?? ''));
+                $dhost = trim((string)($d['host'] ?? ''));
+                if ($dname === '' || $dhost === '') continue;
+                $port = (int)($d['api_port'] ?? 8728);
+                if ($port < 1 || $port > 65535) $port = 8728;
+                $ins->execute([
+                    substr($dname, 0, 60), substr($dhost, 0, 120), $port,
+                    (string)($d['username'] ?? 'admin'), (string)($d['password'] ?? ''),
+                    (string)($d['location'] ?? ''), (string)($d['description'] ?? ''),
+                    !empty($d['enabled']) ? 1 : 0, (string)($d['wan_iface'] ?? ''),
+                    (int)($d['sort_order'] ?? 0),
+                ]);
+                $n++;
+            }
+            if ($n === 0) throw new RuntimeException('none of the routers in the file were usable');
+
+            // A device with no status row is invisible to the poller's joins.
+            $db->exec("INSERT OR IGNORE INTO status (device_id) SELECT id FROM devices");
+
+            if (!empty($in['settings']) && is_array($in['settings'])) {
+                $sst = $db->prepare("INSERT INTO settings (k, v) VALUES (?, ?)
+                                     ON CONFLICT(k) DO UPDATE SET v = excluded.v");
+                $allowed = ['site_name', 'site_tagline', 'poll_seconds', 'net_ping_target',
+                            'net_ping_every', 'history_points', 'live_bandwidth', 'api_timeout'];
+                foreach ($allowed as $k) {
+                    if (isset($in['settings'][$k])) $sst->execute([$k, (string)$in['settings'][$k]]);
+                }
+            }
+
+            // Logins are merged in, not swapped for the file's list: an account that
+            // exists here but not in the backup keeps working. The password of the
+            // account doing the restore IS overwritten, because carrying the old
+            // dashboard password across is most of the point - and since a PHP
+            // session is not re-checked against the hash, whoever is doing this
+            // stays signed in and can change it again straight away if it is wrong.
+            $ka = 0;
+            $mine = false;
+            if (!empty($in['admins']) && is_array($in['admins'])) {
+                $ast = $db->prepare(
+                    "INSERT INTO admins (username, password_hash) VALUES (?, ?)
+                     ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash");
+                foreach ($in['admins'] as $a) {
+                    $au = trim((string)($a['username'] ?? ''));
+                    $ah = (string)($a['password_hash'] ?? '');
+                    if ($au === '' || strlen($ah) < 20) continue;
+                    $ast->execute([$au, $ah]);
+                    if ($au === $me) $mine = true; else $ka++;
+                }
+            }
+
+            // The "still on the default password" banner has to follow the passwords
+            // that just arrived, or a restored install would nag about a password it
+            // no longer uses - or worse, stay quiet about one it does.
+            $onDefault = 0;
+            foreach ($db->query("SELECT password_hash FROM admins")->fetchAll() as $row) {
+                if (password_verify('admin123', $row['password_hash'])) { $onDefault = 1; break; }
+            }
+            $db->prepare("INSERT INTO settings (k,v) VALUES ('default_password_in_use', ?)
+                          ON CONFLICT(k) DO UPDATE SET v = excluded.v")->execute([(string)$onDefault]);
+
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            mt_out(['success' => false, 'message' => 'Restore failed, nothing was changed: ' . $e->getMessage()], 500);
+        }
+
+        mt_settings_reset();
+        // The next poll must start from scratch rather than from the old install's clock.
+        mt_set_setting('last_poll_started', '0');
+
+        $msg = $n . ' router' . ($n === 1 ? '' : 's') . ' restored';
+        if ($ka > 0) $msg .= ', ' . $ka . ' extra login' . ($ka === 1 ? '' : 's') . ' added';
+        $msg .= '. The routers will be read on the next refresh.';
+        if ($mine) $msg .= ' Your dashboard password is now the one from the backup.';
+        mt_out(['success' => true, 'devices' => $n, 'admins' => $ka, 'passwordChanged' => $mine,
+                'message' => $msg]);
+        break;
+
     // --------------------------------------------------------------- settings
     case 'settings_get':
         mt_require_admin();

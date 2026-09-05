@@ -156,6 +156,35 @@ cp mikrotik-monitor-bw.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now mikrotik-monitor-bw
 ```
 
+## Backup and restore
+
+**Settings → Backup of this dashboard.** *Download backup* saves a single JSON
+file holding everything that would otherwise have to be typed in again:
+
+- every router, with its address, API port, API username and password, the
+  interface override and whether it is enabled,
+- the settings (panel name, poll interval, ping target and so on),
+- the dashboard logins, as bcrypt hashes - the passwords themselves are not in
+  the file and cannot be read back out of it.
+
+The graph history is deliberately **not** included. It is thousands of rows a
+day, it is the one thing that rebuilds itself, and leaving it out keeps the
+backup small enough to email to yourself.
+
+To move to another host: upload the files, open the new dashboard, sign in with
+`admin` / `admin123`, then *Choose backup file* → *Restore*. The router list is
+replaced by the one in the file and your old dashboard password comes with it,
+so the next sign-in uses the password you already know. Nothing else needs
+configuring.
+
+Two things worth knowing:
+
+- **The file contains your router API passwords in clear.** It has to - that is
+  what makes the restore complete. Keep it somewhere private.
+- **A restore replaces the router list**, so the readings belonging to routers
+  that are not in the file go with them. A file that is not a backup, or one
+  with no routers in it, is refused before anything is changed.
+
 ## How the numbers are produced
 
 - **Speed** is the router's own per-second traffic monitor when the live lane is

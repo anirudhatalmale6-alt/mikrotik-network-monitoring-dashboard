@@ -704,9 +704,68 @@
       f.net_ping_target.value = r.settings.net_ping_target;
       f.net_ping_every.value  = r.settings.net_ping_every;
       f.live_bandwidth.checked = !!r.settings.live_bandwidth;
+      resetRestore();
       open('#settingsModal');
     });
   }
+
+  // ------------------------------------------------------------ backup / restore
+  function resetRestore() {
+    var inp = $('#restoreFile');
+    if (inp) inp.value = '';
+    $('#restoreName').textContent = '';
+    $('#restoreBtn').disabled = true;
+    var box = $('#restoreResult');
+    box.className = 'result';
+    box.textContent = '';
+  }
+
+  $('#restoreFile').addEventListener('change', function () {
+    var f = this.files && this.files[0];
+    $('#restoreName').textContent = f ? f.name : '';
+    $('#restoreBtn').disabled = !f;
+  });
+
+  $('#restoreBtn').addEventListener('click', function () {
+    var file = $('#restoreFile').files[0];
+    if (!file) return;
+    if (!confirm('Restore from ' + file.name + '?\n\nThe routers currently on this dashboard '
+               + 'will be replaced by the ones in the file.')) return;
+
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = 'Restoring...';
+
+    // FormData, not the JSON helper: this is a file upload, and letting the
+    // browser set the multipart boundary is the only way it arrives intact.
+    var fd = new FormData();
+    fd.append('file', file);
+    fd.append('csrf', state.csrf);
+
+    fetch('api.php?action=restore', { method: 'POST', body: fd, credentials: 'same-origin' })
+      .then(function (r) {
+        return r.json().catch(function () {
+          return { success: false, message: 'The server returned an unreadable response (HTTP ' + r.status + ').' };
+        });
+      })
+      .then(function (r) {
+        btn.textContent = 'Restore';
+        showResult('#restoreResult', r.success, r.message);
+        if (r.success) {
+          $('#restoreFile').value = '';
+          $('#restoreName').textContent = '';
+          toast(r.message, 'ok');
+          refresh();
+        } else {
+          btn.disabled = false;
+        }
+      })
+      .catch(function (e) {
+        btn.textContent = 'Restore';
+        btn.disabled = false;
+        showResult('#restoreResult', false, 'Could not upload the file: ' + e.message);
+      });
+  });
 
   $('#settingsForm').addEventListener('submit', function (e) {
     e.preventDefault();

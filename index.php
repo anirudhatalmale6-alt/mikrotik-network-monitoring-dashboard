@@ -230,6 +230,26 @@ function mt_asset($rel) {
               source as the WinBox graph. Turn this off to fall back to the poll interval above.</span></div>
         </div>
         <div class="result" id="settingsResult"></div>
+
+        <!-- Backup of this installation only: the routers, the settings and the
+             logins. Not the graph history, which is thousands of rows a day and
+             costs nothing to rebuild. -->
+        <div class="bk">
+          <h4>Backup of this dashboard</h4>
+          <p class="hint">Saves the routers you added, their API logins, your settings and your
+            dashboard password - so if you move to another host you type nothing in again.
+            The graph history is not included.</p>
+          <div class="bk-row">
+            <a class="btn btn-slate" id="backupBtn" href="api.php?action=backup" download>Download backup</a>
+            <label class="btn btn-slate" for="restoreFile">Choose backup file</label>
+            <input type="file" id="restoreFile" accept=".json,application/json" hidden>
+            <button type="button" class="btn btn-primary" id="restoreBtn" disabled>Restore</button>
+          </div>
+          <p class="hint" id="restoreName"></p>
+          <p class="hint bk-warn">Keep the file somewhere private - it contains your router passwords.
+            Restoring replaces the router list on this dashboard.</p>
+          <div class="result" id="restoreResult"></div>
+        </div>
       </div>
       <div class="modal-ft">
         <button type="button" class="btn btn-slate" data-close>Cancel</button>
