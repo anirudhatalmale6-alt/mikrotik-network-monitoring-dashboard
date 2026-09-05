@@ -376,25 +376,46 @@ function mt_php_cli(PDO $db) {
     }
 
     $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
-    if (!function_exists('exec') || in_array('exec', $disabled, true) || PHP_OS_FAMILY === 'Windows') {
+    if (!function_exists('exec') || in_array('exec', $disabled, true)) {
         mt_set_setting('php_cli', 'none');
         mt_set_setting('php_cli_at', (string)time());
         return false;
     }
 
+    $win = PHP_OS_FAMILY === 'Windows';
     $candidates = [];
     if (defined('PHP_BINARY') && PHP_BINARY !== '') $candidates[] = PHP_BINARY;
-    $candidates[] = 'php';
-    // CyberPanel / OpenLiteSpeed, newest first.
-    foreach (['84', '83', '82', '81', '80', '74'] as $v) {
-        $candidates[] = "/usr/local/lsws/lsphp$v/bin/php";
+
+    if ($win) {
+        // Under Apache or IIS, PHP_BINARY is the web server executable, not php.exe.
+        // PHP_BINDIR is where the CLI actually lives, and the usual local stacks put
+        // it somewhere predictable - tested for real below, never assumed.
+        if (defined('PHP_BINDIR') && PHP_BINDIR !== '') $candidates[] = PHP_BINDIR . '\\php.exe';
+        $candidates[] = 'php';
+        foreach (['C:\\xampp\\php\\php.exe', 'C:\\wamp64\\bin\\php\\php.exe',
+                  'C:\\php\\php.exe', 'C:\\laragon\\bin\\php\\php.exe'] as $p) $candidates[] = $p;
+        foreach (['C:\\laragon\\bin\\php\\*\\php.exe', 'C:\\wamp64\\bin\\php\\*\\php.exe',
+                  'C:\\Program Files\\php*\\php.exe'] as $g) {
+            foreach ((array)@glob($g) as $hit) $candidates[] = $hit;
+        }
+    } else {
+        $candidates[] = 'php';
+        // CyberPanel / OpenLiteSpeed, newest first.
+        foreach (['84', '83', '82', '81', '80', '74'] as $v) {
+            $candidates[] = "/usr/local/lsws/lsphp$v/bin/php";
+        }
+        $candidates[] = '/usr/bin/php';
+        $candidates[] = '/usr/local/bin/php';
     }
-    $candidates[] = '/usr/bin/php';
-    $candidates[] = '/usr/local/bin/php';
 
     foreach (array_unique($candidates) as $bin) {
         $out = []; $rc = 1;
-        @exec(escapeshellarg($bin) . ' -r ' . escapeshellarg('echo "MTOK";') . ' 2>/dev/null', $out, $rc);
+        // Windows escapeshellarg strips double quotes, which would mangle a probe
+        // written with them - so the probe uses single quotes and its own quoting.
+        $cmd = $win
+            ? mt_win_cmd(str_replace('"', '', $bin), ['-r', "echo 'MTOK';"], false)
+            : escapeshellarg($bin) . ' -r ' . escapeshellarg('echo "MTOK";') . ' 2>/dev/null';
+        @exec($cmd, $out, $rc);
         if ($rc === 0 && in_array('MTOK', array_map('trim', $out), true)) {
             mt_set_setting('php_cli', $bin);
             mt_set_setting('php_cli_at', (string)time());
@@ -404,6 +425,48 @@ function mt_php_cli(PDO $db) {
     mt_set_setting('php_cli', 'none');
     mt_set_setting('php_cli_at', (string)time());
     return false;
+}
+
+/**
+ * Build a command line for cmd.exe.
+ *
+ * cmd.exe strips the outermost pair of quotes when the command it is given both
+ * starts and ends with one, which silently breaks a quoted program path that has a
+ * space in it - "C:\Program Files\...". The documented answer is to wrap the whole
+ * line in one more pair, and only then.
+ *
+ * $background prefixes "start /B", which hands the process off and returns at once.
+ */
+function mt_win_cmd($bin, array $args, $background) {
+    $line = '"' . $bin . '"';
+    foreach ($args as $a) $line .= ' "' . str_replace('"', '', $a) . '"';
+    // The empty "" is the window title, which start would otherwise take from the
+    // first quoted argument - and then try to run the title as the program. With
+    // that title in place start already handles a spaced path, so the extra pair
+    // below must NOT be added here as well: it would be parsed as the title.
+    if ($background) return 'start /B "" ' . $line;
+    if (strpos($bin, ' ') !== false) $line = '"' . $line . '"';
+    return $line;
+}
+
+/**
+ * Start a command in the background and return immediately.
+ *
+ * Windows has no "&", and proc_close() would wait for the child - which is exactly
+ * what must not happen here. "start /B" hands the process to the shell, and the
+ * shell itself exits at once, so pclose() does not block.
+ */
+function mt_spawn($bin, array $args) {
+    if (PHP_OS_FAMILY === 'Windows') {
+        $h = @popen(mt_win_cmd(str_replace('"', '', $bin), $args, true), 'r');
+        if ($h === false) return false;
+        pclose($h);
+        return true;
+    }
+    $cmd = escapeshellarg($bin);
+    foreach ($args as $a) $cmd .= ' ' . escapeshellarg($a);
+    @exec($cmd . ' > /dev/null 2>&1 &');
+    return true;
 }
 
 /**

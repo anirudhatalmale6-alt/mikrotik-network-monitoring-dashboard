@@ -237,6 +237,5 @@ function mt_maybe_bw(PDO $db) {
     // Long enough that restarts are rare - each one costs a second or two while the
     // connections are re-opened - but still short enough that the process goes away
     // on its own once nobody is looking at the dashboard.
-    @exec(escapeshellarg($bin) . ' ' . escapeshellarg(dirname(__DIR__) . '/poller.php')
-          . ' --bw --seconds=180 > /dev/null 2>&1 &');
+    mt_spawn($bin, [dirname(__DIR__) . '/poller.php', '--bw', '--seconds=180']);
 }

@@ -376,6 +376,12 @@
         + '. The figures below are the last readings, not live. If you installed the background poller, check it is running'
         + ' (<span class="mono">systemctl status mikrotik-monitor</span>).</div></div>';
     }
+    // Not an error - it is the normal state of a fresh install, and saying so beats
+    // leaving someone staring at empty tiles wondering what went wrong.
+    if (!d.stale && d.devices.length && !d.liveLane && d.liveWhy) {
+      out += '<div class="notice notice-info">' + svg('bolt')
+        + '<div><b>Live bandwidth is not running.</b> ' + esc(d.liveWhy) + '</div></div>';
+    }
     if (d.defaultPassword && d.isAdmin) {
       out += '<div class="notice notice-info">' + svg('lock')
         + '<div><b>The admin account still uses the default password.</b> Anyone who can open this page can change your routers.'
@@ -432,7 +438,12 @@
       renderTiles(d.summary);
       renderDevices(d.devices);
 
-      $('#pollLabel').textContent = 'every ' + state.pollSeconds + 's';
+      $('#pollLabel').textContent = d.liveLane ? 'live, every 1s' : 'every ' + state.pollSeconds + 's';
+      // A bare "every 5s" reads like the live figures never arrived. Say what is
+      // missing instead, on the pill itself.
+      $('#livePill').title = d.liveLane
+        ? 'Bandwidth is streaming from the routers, one reading per second.'
+        : (d.liveWhy || '');
       $('#livePill').className = 'live-pill' + (d.stale ? ' warn' : '');
       $('#devSub').textContent = d.devices.length
         ? d.summary.onlineDevices + ' of ' + d.summary.totalDevices + ' reachable, last checked ' + ago(d.lastPoll)

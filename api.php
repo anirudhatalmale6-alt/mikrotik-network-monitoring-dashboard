@@ -86,8 +86,7 @@ function mt_maybe_poll(PDO $db) {
     $bin = $dispatchFailed ? false : mt_php_cli($db);
     if ($bin !== false) {
         mt_unlock($lock);                                // the child takes the lock
-        @exec(escapeshellarg($bin) . ' ' . escapeshellarg(__DIR__ . '/poller.php')
-              . ' --once > /dev/null 2>&1 &');
+        mt_spawn($bin, [__DIR__ . '/poller.php', '--once']);
         return;
     }
 
@@ -97,6 +96,20 @@ function mt_maybe_poll(PDO $db) {
     if ($dispatchFailed) mt_set_setting('php_cli', 'none');
     try { mt_poll_all($db); } catch (Throwable $e) { /* a failed poll must not break the page */ }
     mt_unlock($lock);
+}
+
+/** Why the once-a-second lane is not running, in words the installer can act on. */
+function mt_live_why(PDO $db, $deviceCount) {
+    if (mt_setting('live_bandwidth', '1') !== '1') return 'Live bandwidth is switched off in Settings.';
+    if ($deviceCount === 0) return 'No routers added yet - add one and the live figures start.';
+    $online = (int)$db->query("SELECT COUNT(*) FROM status s JOIN devices d ON d.id=s.device_id
+                                WHERE d.enabled=1 AND s.online=1")->fetchColumn();
+    if ($online === 0) return 'No router is reachable yet, so there is nothing to stream.';
+    if (mt_setting_now($db, 'php_cli', '') === 'none') {
+        return 'This host does not allow starting a background process, so bandwidth '
+             . 'falls back to the poll interval. Run "php poller.php --bw --seconds=0" yourself to get it.';
+    }
+    return 'Starting...';
 }
 
 /** The combined graph, newest last. */
@@ -150,7 +163,8 @@ switch ($action) {
         }
         $tot['totalBandwidthBps'] = $tot['totalDownloadBps'] + $tot['totalUploadBps'];
         mt_out(['success' => true, 'summary' => $tot, 'devices' => $devs,
-                'history' => mt_history($db), 'liveLane' => mt_bw_alive($db)]);
+                'history' => mt_history($db),
+                'liveLane' => mt_bw_alive($db) && $tot['onlineDevices'] > 0]);
         break;
 
     // -------------------------------------------------------------- dashboard
@@ -227,7 +241,10 @@ switch ($action) {
 
         $history = mt_history($db);
         $newest  = $db->query("SELECT MAX(last_try) FROM status")->fetchColumn();
-        $liveLane = mt_bw_alive($db);
+        // "Live" has to mean live figures are arriving, not merely that the process
+        // exists. A lane running with nothing reachable to stream is not live, and
+        // labelling it so would be the dashboard telling a comfortable lie.
+        $liveLane = mt_bw_alive($db) && $summary['onlineDevices'] > 0;
         mt_out([
             'success'    => true,
             'summary'    => $summary,
@@ -244,10 +261,17 @@ switch ($action) {
             // every second, so the page reads the small live endpoint on that clock.
             'liveLane'   => $liveLane,
             'liveRefresh'=> 1,
+            // When the live lane is NOT running, say why rather than quietly showing
+            // the slower interval - "every 5s" on its own reads like nothing was
+            // fixed, when the real answer is usually "no routers added yet".
+            'liveWhy'    => $liveLane ? '' : mt_live_why($db, count($devices)),
             'lastPoll'   => $newest,
             // True when nothing has polled recently: the page says so instead of
-            // letting old numbers pass for live ones.
-            'stale'      => !$newest || (time() - strtotime($newest)) > max(60, (int)mt_setting('poll_seconds', 10) * 4),
+            // letting old numbers pass for live ones. A brand new install with no
+            // routers yet is not stale, it is empty - warning there just makes a
+            // correct installation look broken.
+            'stale'      => count($devices) > 0
+                            && (!$newest || (time() - strtotime($newest)) > max(60, (int)mt_setting('poll_seconds', 10) * 4)),
             'isAdmin'    => mt_is_admin(),
             'adminUser'  => mt_admin_name(),
             'csrf'       => mt_is_admin() ? mt_csrf() : '',
