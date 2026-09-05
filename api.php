@@ -442,13 +442,6 @@ switch ($action) {
         $host = trim(preg_replace('/[^a-z0-9.-]+/', '-', $host), '-.');
         $target = dirname($docRoot) . '/mikrotik-monitor-data' . ($host !== '' ? '-' . $host : '');
 
-        // Never write into a database that is already there: it would belong to
-        // another installation, and merging two sets of routers is not something
-        // that can be undone from the dashboard.
-        if (is_file($target . '/monitor.sqlite')) {
-            mt_out(['success' => false, 'message' => 'There is already a database at ' . $target
-                    . '/monitor.sqlite, so nothing was changed. Move or remove that file first.'], 409);
-        }
         if (!is_dir($target) && !@mkdir($target, 0750, true) && !is_dir($target)) {
             mt_out(['success' => false, 'message' => 'Could not create ' . $target . ' - the account may not have permission.'], 500);
         }
@@ -462,6 +455,61 @@ switch ($action) {
 
         $src = MT_DB_FILE;
         $dst = $target . '/monitor.sqlite';
+
+        // A database already in the target folder is this site's OWN, from before it
+        // was reinstalled - the folder name carries the hostname, so it cannot belong
+        // to another subdomain. Refusing here (which an earlier version did) blocks
+        // the one case that happens most: delete the files, upload them again, press
+        // the button. Neither file is ever destroyed; the one not chosen is kept
+        // beside it with a dated name, inside the protected folder.
+        if (is_file($dst)) {
+            $here  = (int)$db->query("SELECT COUNT(*) FROM devices")->fetchColumn();
+            $there = null;
+            try {
+                $chk = new PDO('sqlite:' . $dst, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+                $there = (int)$chk->query("SELECT COUNT(*) FROM devices")->fetchColumn();
+                $chk = null;
+            } catch (Throwable $e) {
+                $there = null;      // not a database this app can read
+            }
+
+            // The install being used wins. An empty one - a fresh upload with nothing
+            // typed into it yet - adopts what was already there, which is how a
+            // reinstall gets its routers back.
+            $adopt = ($here === 0 && $there !== null);
+            $stamp = date('Ymd-His');
+            $aside = $target . '/monitor-' . ($adopt ? 'replaced' : 'previous') . '-' . $stamp . '.sqlite';
+
+            if ($adopt) {
+                if (!@copy($src, $aside)) {
+                    mt_out(['success' => false, 'message' => 'Could not write to ' . $target . ', so nothing was changed.'], 500);
+                }
+                $conf = MT_ROOT . '/config.local.php';
+                $php  = "<?php if (!defined('MT_DATA')) define('MT_DATA', " . var_export($target, true) . ");\n";
+                if (@file_put_contents($conf, $php) === false) {
+                    @unlink($aside);
+                    mt_out(['success' => false, 'message' => 'Could not write config.local.php, so nothing was changed.'], 500);
+                }
+                foreach ([$src, $src . '-wal', $src . '-shm', MT_DATA . '/poll.lock'] as $old) {
+                    if (is_file($old)) @unlink($old);
+                }
+                mt_out(['success' => true, 'moved' => $target, 'adopted' => true,
+                        'message' => 'Found the database this site was using before, with ' . $there
+                            . ' router' . ($there === 1 ? '' : 's') . ' in it, and kept that one. It is now at '
+                            . $target . ', outside the web root. Reload the page - your routers should be back, '
+                            . 'and the dashboard login is the one that database was using.']);
+            }
+
+            // Otherwise this installation has routers of its own, so it keeps them and
+            // the older file is set aside rather than overwritten.
+            if (!@rename($dst, $aside)) {
+                mt_out(['success' => false, 'message' => 'Could not set aside the older database at ' . $dst
+                        . ', so nothing was changed.'], 500);
+            }
+            foreach ([$dst . '-wal', $dst . '-shm'] as $side) { if (is_file($side)) @unlink($side); }
+            $setAside = $aside;
+        }
+
         if (!@copy($src, $dst)) {
             mt_out(['success' => false, 'message' => 'Could not copy the database to ' . $target . '.'], 500);
         }
@@ -496,8 +544,13 @@ switch ($action) {
         foreach ([$src, $src . '-wal', $src . '-shm', MT_DATA . '/poll.lock'] as $old) {
             if (is_file($old)) @unlink($old);
         }
-        mt_out(['success' => true, 'moved' => $target,
-                'message' => 'Database moved to ' . $target . ', outside the web root. Reload the page.']);
+        $msg = 'Database moved to ' . $target . ', outside the web root.';
+        if (!empty($setAside)) {
+            $msg .= ' An older database was already there; it was not deleted, it is beside it as '
+                  . basename($setAside) . '.';
+        }
+        mt_out(['success' => true, 'moved' => $target, 'setAside' => $setAside ?? null,
+                'message' => $msg . ' Reload the page.']);
         break;
 
     // ------------------------------------------------------- backup / restore
