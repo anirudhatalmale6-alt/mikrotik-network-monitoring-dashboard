@@ -368,17 +368,41 @@ function mt_trim_history(PDO $db) {
  * binary that prints it is used. The answer is cached because the check costs a
  * process, and re-checked occasionally in case the host changes.
  */
+define('MT_CLI_PROBE_VERSION', 2);   // bump whenever the candidate list changes
+
 function mt_php_cli(PDO $db) {
     $cached = mt_setting_now($db, 'php_cli', '');
     $when   = (int)mt_setting_now($db, 'php_cli_at', 0);
-    if ($cached !== '' && (time() - $when) < 86400) {
-        return $cached === 'none' ? false : $cached;
+    $ver    = (int)mt_setting_now($db, 'php_cli_ver', 0);
+
+    // A cached answer must not outlive the code that produced it. The first version
+    // of this refused to look at all on Windows and wrote "none"; after the fix, that
+    // stale "none" would have gone on blocking the live lane for another day on every
+    // installation that had already run once. And "none" is a failure, not a fact
+    // about the host, so it is retried in minutes while a working binary is trusted
+    // for a day.
+    if ($cached !== '' && $ver === MT_CLI_PROBE_VERSION) {
+        $maxAge = $cached === 'none' ? 600 : 86400;
+        if ((time() - $when) < $maxAge) return $cached === 'none' ? false : $cached;
     }
 
-    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
-    if (!function_exists('exec') || in_array('exec', $disabled, true)) {
-        mt_set_setting('php_cli', 'none');
+    $remember = function ($value, $why) {
+        mt_set_setting('php_cli', $value);
         mt_set_setting('php_cli_at', (string)time());
+        mt_set_setting('php_cli_ver', (string)MT_CLI_PROBE_VERSION);
+        mt_set_setting('php_cli_why', $why);
+    };
+
+    // Which of these the host forbids decides what the answer is, so name it rather
+    // than reporting a bare failure: "exec is disabled" and "no PHP binary found"
+    // need completely different fixes.
+    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
+    $blocked = [];
+    foreach (['exec', 'popen'] as $fn) {
+        if (!function_exists($fn) || in_array($fn, $disabled, true)) $blocked[] = $fn;
+    }
+    if ($blocked) {
+        $remember('none', 'PHP on this host has ' . implode(' and ', $blocked) . ' disabled');
         return false;
     }
 
@@ -417,13 +441,11 @@ function mt_php_cli(PDO $db) {
             : escapeshellarg($bin) . ' -r ' . escapeshellarg('echo "MTOK";') . ' 2>/dev/null';
         @exec($cmd, $out, $rc);
         if ($rc === 0 && in_array('MTOK', array_map('trim', $out), true)) {
-            mt_set_setting('php_cli', $bin);
-            mt_set_setting('php_cli_at', (string)time());
+            $remember($bin, '');
             return $bin;
         }
     }
-    mt_set_setting('php_cli', 'none');
-    mt_set_setting('php_cli_at', (string)time());
+    $remember('none', 'no working PHP command line was found on this host');
     return false;
 }
 

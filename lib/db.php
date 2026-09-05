@@ -142,6 +142,13 @@ function mt_schema(PDO $db) {
         // When the live bandwidth lane last wrote this row. Lets the ordinary poll
         // tell whether someone faster is already keeping rx_bps up to date.
         'bw_at'           => 'TEXT',
+        // Counters kept by the inline fallback, which runs on hosts that forbid
+        // background processes. Deliberately separate from last_rx / last_tx: those
+        // belong to the full poll, and two readers sharing one baseline would each
+        // compute a rate over the other's interval.
+        'inline_rx'       => 'INTEGER',
+        'inline_tx'       => 'INTEGER',
+        'inline_at'       => 'REAL',
     ]);
 
     $defaults = [

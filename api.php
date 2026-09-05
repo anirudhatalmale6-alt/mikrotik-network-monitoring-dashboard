@@ -98,6 +98,23 @@ function mt_maybe_poll(PDO $db) {
     mt_unlock($lock);
 }
 
+/**
+ * How the bandwidth figures are being produced right now:
+ *   stream - a lane process holding connections open, one reading per second
+ *   direct - read on each page refresh, about a round trip per router
+ *   poll   - whatever the ordinary poll last wrote, at the poll interval
+ */
+function mt_live_mode(PDO $db, $onlineDevices) {
+    if ($onlineDevices <= 0) return 'poll';
+    if (mt_bw_alive($db)) return 'stream';
+    // Generous window: this is asked at the END of a request that may have just
+    // spent several seconds on a full poll, and the live endpoint runs every
+    // second regardless, so anything this recent still means "reading directly".
+    $inline = (float)mt_setting_now($db, 'bw_inline_at', 0);
+    if ($inline > 0 && (microtime(true) - $inline) < 15) return 'direct';
+    return 'poll';
+}
+
 /** Why the once-a-second lane is not running, in words the installer can act on. */
 function mt_live_why(PDO $db, $deviceCount) {
     if (mt_setting('live_bandwidth', '1') !== '1') return 'Live bandwidth is switched off in Settings.';
@@ -106,8 +123,14 @@ function mt_live_why(PDO $db, $deviceCount) {
                                 WHERE d.enabled=1 AND s.online=1")->fetchColumn();
     if ($online === 0) return 'No router is reachable yet, so there is nothing to stream.';
     if (mt_setting_now($db, 'php_cli', '') === 'none') {
-        return 'This host does not allow starting a background process, so bandwidth '
-             . 'falls back to the poll interval. Run "php poller.php --bw --seconds=0" yourself to get it.';
+        $why = mt_setting_now($db, 'php_cli_why', 'this host does not allow starting a background process');
+        // The fallback is already running in this request, so say what IS happening
+        // before saying what would be better - the figures are not stuck at the poll
+        // interval any more, they are just costing a round trip each.
+        return 'Streaming needs a background process and ' . $why . ', so the figures are being '
+             . 'read directly on each refresh instead - about a second per router. To get the full '
+             . 'once-a-second stream, run the lane from cron: '
+             . '* * * * * php ' . MT_ROOT . '/poller.php --bw --seconds=60';
     }
     return 'Starting...';
 }
@@ -137,7 +160,18 @@ switch ($action) {
     // bandwidth numbers, and asks for the full summary on a slower clock. Sending
     // everything once a second would rebuild the whole page each time.
     case 'live':
-        if (mt_setting('live_bandwidth', '1') === '1') mt_maybe_bw($db);
+        if (mt_setting('live_bandwidth', '1') === '1') {
+            mt_maybe_bw($db);
+            // No lane, and no way to start one on this host: take the reading here.
+            // Rate limited so several open tabs cannot each dial the routers.
+            if (!mt_bw_alive($db) && mt_php_cli($db) === false) {
+                $last = (float)mt_setting_now($db, 'bw_inline_at', 0);
+                if (microtime(true) - $last >= 0.8) {
+                    mt_set_setting('bw_inline_at', (string)microtime(true));
+                    try { mt_bw_inline($db); } catch (Throwable $e) { /* never break the page */ }
+                }
+            }
+        }
         mt_maybe_poll($db);
 
         $rows = $db->query("SELECT s.device_id, s.online, s.rx_bps, s.tx_bps, s.hotspot_users,
@@ -164,7 +198,8 @@ switch ($action) {
         $tot['totalBandwidthBps'] = $tot['totalDownloadBps'] + $tot['totalUploadBps'];
         mt_out(['success' => true, 'summary' => $tot, 'devices' => $devs,
                 'history' => mt_history($db),
-                'liveLane' => mt_bw_alive($db) && $tot['onlineDevices'] > 0]);
+                'liveLane' => mt_bw_alive($db) && $tot['onlineDevices'] > 0,
+                'liveMode' => mt_live_mode($db, $tot['onlineDevices'])]);
         break;
 
     // -------------------------------------------------------------- dashboard
@@ -260,6 +295,7 @@ switch ($action) {
             // Bandwidth comes from the router's own traffic monitor, which reports
             // every second, so the page reads the small live endpoint on that clock.
             'liveLane'   => $liveLane,
+            'liveMode'   => mt_live_mode($db, $summary['onlineDevices']),
             'liveRefresh'=> 1,
             // When the live lane is NOT running, say why rather than quietly showing
             // the slower interval - "every 5s" on its own reads like nothing was

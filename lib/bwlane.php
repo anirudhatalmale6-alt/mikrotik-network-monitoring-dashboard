@@ -199,6 +199,89 @@ function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false) {
     return true;
 }
 
+/**
+ * Live bandwidth on a host that will not let anything run in the background.
+ *
+ * CyberPanel and most shared hosting disable exec, so there is no lane process and
+ * no way to hold a connection open between requests. What is still possible is to
+ * make the request itself cheap: ask each router for ONE interface's byte counters
+ * - a single round trip of about half a second - instead of the six questions a
+ * full poll asks. Two of those readings and the time between them give the rate.
+ *
+ * It is not as good as the streaming lane and does not pretend to be: it costs a
+ * round trip per router per update. But it turns "every 5 seconds" into roughly
+ * once a second for a small network, with nothing installed.
+ *
+ * Bounded by $budget seconds so a page request can never hang on a slow router,
+ * and it keeps its own counters so it cannot disturb the full poll's rate.
+ */
+function mt_bw_inline(PDO $db, $budget = 2.5) {
+    $deadline = microtime(true) + $budget;
+
+    // One at a time. Two requests each taking a reading would measure against each
+    // other's baseline and invent rates that never happened.
+    $lock = mt_bw_lock();
+    if ($lock === false || $lock === null) return false;
+
+    try {
+        $devs = $db->query("SELECT d.id, d.host, d.api_port, d.username, d.password,
+                                   d.wan_iface, s.wan_iface AS live_wan,
+                                   s.inline_rx, s.inline_tx, s.inline_at
+                              FROM devices d JOIN status s ON s.device_id = d.id
+                             WHERE d.enabled = 1 AND s.online = 1
+                             ORDER BY d.sort_order, d.id")->fetchAll();
+        foreach ($devs as $d) {
+            if (microtime(true) > $deadline) break;
+            $iface = trim((string)($d['wan_iface'] !== '' ? $d['wan_iface'] : $d['live_wan']));
+            if ($iface === '') continue;
+
+            $ros = new RouterOs(3);
+            try {
+                $ros->connect($d['host'], $d['api_port'], $d['username'], $d['password']);
+                $rows = $ros->query('/interface/print',
+                                    ['?name=' . $iface, '=.proplist=name,rx-byte,tx-byte']);
+                $ros->close();
+            } catch (Exception $e) {
+                $ros->close();
+                continue;               // the full poll is what decides reachability
+            }
+            if (!$rows) continue;
+
+            $rx = (int)($rows[0]['rx-byte'] ?? 0);
+            $tx = (int)($rows[0]['tx-byte'] ?? 0);
+            $now = microtime(true);
+
+            $prevAt = (float)$d['inline_at'];
+            if ($prevAt > 0 && $d['inline_rx'] !== null) {
+                $dt = $now - $prevAt;
+                // Too soon to be meaningful, or so long ago the router may have
+                // rebooted in between - either way, take a fresh baseline instead.
+                if ($dt >= 0.4 && $dt <= 120 && $rx >= (int)$d['inline_rx'] && $tx >= (int)$d['inline_tx']) {
+                    $rxBps = (int)round(($rx - (int)$d['inline_rx']) * 8 / $dt);
+                    $txBps = (int)round(($tx - (int)$d['inline_tx']) * 8 / $dt);
+                    $db->prepare("UPDATE status SET rx_bps=?, tx_bps=?, bw_at=? WHERE device_id=?")
+                       ->execute([$rxBps, $txBps, date('Y-m-d H:i:s'), $d['id']]);
+                    $db->prepare("INSERT INTO samples (device_id, ts, rx_bps, tx_bps) VALUES (?,?,?,?)")
+                       ->execute([$d['id'], time(), $rxBps, $txBps]);
+                }
+            }
+            $db->prepare("UPDATE status SET inline_rx=?, inline_tx=?, inline_at=? WHERE device_id=?")
+               ->execute([$rx, $tx, $now, $d['id']]);
+        }
+
+        // The combined point, from whatever the rows now hold.
+        $t = $db->query("SELECT COALESCE(SUM(rx_bps),0) rx, COALESCE(SUM(tx_bps),0) tx
+                           FROM status s JOIN devices d ON d.id=s.device_id
+                          WHERE s.online=1 AND d.enabled=1")->fetch();
+        $db->prepare("INSERT INTO totals (ts, rx_bps, tx_bps) VALUES (?,?,?)
+                      ON CONFLICT(ts) DO UPDATE SET rx_bps=excluded.rx_bps, tx_bps=excluded.tx_bps")
+           ->execute([time(), (int)$t['rx'], (int)$t['tx']]);
+    } finally {
+        if (is_resource($lock)) { flock($lock, LOCK_UN); fclose($lock); }
+    }
+    return true;
+}
+
 /** Store one live reading for a device. */
 function mt_bw_store(PDO $db, $deviceId, $rx, $tx) {
     $ts = time();

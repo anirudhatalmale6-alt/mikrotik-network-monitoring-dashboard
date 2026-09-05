@@ -5,7 +5,7 @@
   'use strict';
 
   var state = { csrf: '', isAdmin: false, devices: [], pollSeconds: 5, uiRefresh: 3,
-                timer: null, liveTimer: null, liveLane: false, deleteId: 0 };
+                timer: null, liveTimer: null, liveLane: false, liveMode: 'poll', deleteId: 0 };
   var $  = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
@@ -378,9 +378,12 @@
     }
     // Not an error - it is the normal state of a fresh install, and saying so beats
     // leaving someone staring at empty tiles wondering what went wrong.
-    if (!d.stale && d.devices.length && !d.liveLane && d.liveWhy) {
+    if (!d.stale && d.devices.length && d.liveMode !== 'stream' && d.liveWhy) {
       out += '<div class="notice notice-info">' + svg('bolt')
-        + '<div><b>Live bandwidth is not running.</b> ' + esc(d.liveWhy) + '</div></div>';
+        + '<div><b>' + (d.liveMode === 'direct'
+            ? 'Bandwidth is being read on every refresh.'
+            : 'Live bandwidth is not running.')
+        + '</b> ' + esc(d.liveWhy) + '</div></div>';
     }
     if (d.defaultPassword && d.isAdmin) {
       out += '<div class="notice notice-info">' + svg('lock')
@@ -438,10 +441,11 @@
       renderTiles(d.summary);
       renderDevices(d.devices);
 
-      $('#pollLabel').textContent = d.liveLane ? 'live, every 1s' : 'every ' + state.pollSeconds + 's';
+      state.liveMode = d.liveMode || 'poll';
+      $('#pollLabel').textContent = liveLabel(state.liveMode);
       // A bare "every 5s" reads like the live figures never arrived. Say what is
-      // missing instead, on the pill itself.
-      $('#livePill').title = d.liveLane
+      // actually happening instead, on the pill itself.
+      $('#livePill').title = d.liveMode === 'stream'
         ? 'Bandwidth is streaming from the routers, one reading per second.'
         : (d.liveWhy || '');
       $('#livePill').className = 'live-pill' + (d.stale ? ' warn' : '');
@@ -470,6 +474,14 @@
      full refresh above does on its slower clock. */
   function setText(id, txt) { var el = document.getElementById(id); if (el && el.textContent !== txt) el.textContent = txt; }
 
+  // Three honest states, not two: streaming, read on each refresh, or whatever the
+  // ordinary poll last wrote.
+  function liveLabel(mode) {
+    if (mode === 'stream') return 'live, every 1s';
+    if (mode === 'direct') return 'live, read on refresh';
+    return 'every ' + state.pollSeconds + 's';
+  }
+
   function liveTick() {
     return api('live').then(function (d) {
       if (!d || !d.success) return;
@@ -497,8 +509,9 @@
         }
       });
 
+      state.liveMode = d.liveMode || state.liveMode;
       var pl = $('#pollLabel');
-      if (pl) pl.textContent = d.liveLane ? 'live, every 1s' : 'every ' + state.pollSeconds + 's';
+      if (pl) pl.textContent = liveLabel(state.liveMode);
 
       lastPoints = d.history || lastPoints;
       drawChart('#chart', lastPoints);
