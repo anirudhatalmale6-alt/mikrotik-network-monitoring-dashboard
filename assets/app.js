@@ -65,6 +65,7 @@
     lock:    '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
     settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
     warn:    '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    nodes:   '<circle cx="12" cy="12" r="2"/><circle cx="4" cy="5" r="2"/><circle cx="20" cy="5" r="2"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="19" r="2"/><line x1="10.5" y1="10.5" x2="5.5" y2="6"/><line x1="13.5" y1="10.5" x2="18.5" y2="6"/><line x1="10.5" y1="13.5" x2="5.5" y2="18"/><line x1="13.5" y1="13.5" x2="18.5" y2="18"/>',
     check:   '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
   };
   function svg(name, cls) {
@@ -86,7 +87,10 @@
   }
 
   // --------------------------------------------------------------------- api
-  function api(action, body, method) {
+  /* qs - extra query parameters for a GET endpoint. They go through
+     encodeURIComponent individually; putting them inside `action` would encode
+     the separators too and the server would see one long action name. */
+  function api(action, body, method, qs) {
     var opts = { credentials: 'same-origin', cache: 'no-store' };
     if (body) {
       body.csrf = state.csrf;
@@ -94,7 +98,14 @@
       opts.headers = { 'Content-Type': 'application/json' };
       opts.body = JSON.stringify(body);
     }
-    return fetch('api.php?action=' + encodeURIComponent(action), opts).then(function (r) {
+    var url = 'api.php?action=' + encodeURIComponent(action);
+    if (qs) {
+      Object.keys(qs).forEach(function (k) {
+        if (qs[k] === '' || qs[k] === null || qs[k] === undefined) return;
+        url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(qs[k]);
+      });
+    }
+    return fetch(url, opts).then(function (r) {
       return r.json().catch(function () {
         return { success: false, message: 'The server returned an unreadable response (HTTP ' + r.status + ').' };
       });
@@ -233,7 +244,13 @@
       + tile('t-indigo', 'Total upload', bps(s.totalUploadBps), 'up', 'Combined egress', { id: 'tv-ul' })
       + tile('t-blue', 'Total bandwidth', bps(s.totalBandwidthBps), 'act', 'Download + upload', { id: 'tv-bw' })
       + tile('t-slate', 'Total MikroTik devices', s.totalDevices, 'server', 'Monitored routers &middot; <b>see list</b>',
-             { id: 'tv-total', list: 'all' });
+             { id: 'tv-total', list: 'all' })
+      // Everything found behind the routers. Only an admin can open the list, so
+      // there is no point offering the click to a signed-out visitor.
+      + tile('t-violet', 'Connected devices', (s.totalLanDevices || 0).toLocaleString(), 'nodes',
+             '<b>' + (s.totalInfraDevices || 0) + '</b> network devices'
+             + (state.isAdmin ? ' &middot; <b>see list</b>' : ' &middot; sign in to see the list'),
+             { id: 'tv-lan', list: state.isAdmin ? 'lan' : '' });
   }
 
   /* ------------------------------------------------------------- device list
@@ -615,6 +632,83 @@
     rt = setTimeout(function () { drawChart('#chart', lastPoints); }, 180);
   });
 
+  /* ------------------------------------------------- connected devices behind
+     Unlike the router list this is NOT already on the page - it can be hundreds
+     of rows per router, so it is fetched when the modal opens and re-fetched
+     when he types, with the filtering done by the database rather than here. */
+  var lanTimer = null;
+
+  function lanRows(list) {
+    if (!list.length) {
+      return '<div class="lan-empty">Nothing found yet. A scan runs a few minutes after each '
+           + 'router is polled - or press "Scan now" above.</div>';
+    }
+    var body = list.map(function (d) {
+      // The best name the router could give us, in order of how specific it is.
+      // A switch that only speaks LLDP sends no identity, but it does send its
+      // model - which is a far better name for it than its vendor.
+      var name = d.identity || d.hostname || d.board || d.comment || d.vendor || d.mac;
+      var model = [d.board, d.platform, d.version].filter(Boolean).join(' &middot; ');
+      var cls = (d.isInfra ? 'infra' : '') + (d.online ? '' : ' off');
+      return '<tr class="' + cls + '">'
+           + '<td><div class="lan-name">' + esc(name) + '</div>'
+           + (d.ip ? '<div class="lan-sub">' + esc(d.ip) + '</div>' : '')
+           + '</td>'
+           + '<td class="lan-mac">' + esc(d.mac) + '</td>'
+           + '<td class="hide-sm">' + esc(d.vendor || '-') + '</td>'
+           + '<td class="hide-sm">' + (model || '<span style="color:var(--muted-2)">-</span>') + '</td>'
+           + '<td>' + (d.kind
+                ? '<span class="lan-kind' + (d.isInfra ? ' k-net' : '') + '">' + esc(d.kind) + '</span>'
+                : (d.isInfra ? '<span class="lan-kind k-net">Network</span>' : '')) + '</td>'
+           + '<td class="hide-sm">' + esc(d.router) + (d.iface ? '<div class="lan-sub">' + esc(d.iface) + '</div>' : '') + '</td>'
+           + '<td>' + (d.online ? '<span class="pill pill-on"><span class="d"></span>Online</span>'
+                                : '<span class="pill pill-off"><span class="d"></span>' + esc((d.lastSeen || '').slice(0, 16)) + '</span>') + '</td>'
+           + '<td>' + (d.mgmtUrl
+                ? '<a class="lan-open" href="' + esc(d.mgmtUrl) + '" target="_blank" rel="noopener">Open</a>'
+                : '') + '</td>'
+           + '</tr>';
+    }).join('');
+
+    return '<table class="lan"><thead><tr>'
+         + '<th>Device</th><th>MAC</th><th class="hide-sm">Vendor</th><th class="hide-sm">Model / firmware</th>'
+         + '<th>Type</th><th class="hide-sm">Behind</th><th>Status</th><th></th>'
+         + '</tr></thead><tbody>' + body + '</tbody></table>';
+  }
+
+  function loadLan() {
+    var q = $('#lanSearch').value.trim();
+    var infra = $('#lanInfra').checked ? '1' : '';
+    return api('lan', null, 'GET', { q: q, infra: infra }).then(function (r) {
+      if (!r.success) {
+        $('#lanBody').innerHTML = '<div class="lan-empty">' + esc(r.message || 'Could not read the list.') + '</div>';
+        return;
+      }
+      $('#lanSub').textContent = r.devices.length + ' device' + (r.devices.length === 1 ? '' : 's')
+        + (q || infra ? ' matching' : ' seen')
+        + ' - scanned every ' + Math.round(r.every / 60) + ' min';
+
+      $('#lanScans').innerHTML = (r.scans || []).map(function (s) {
+        var when = s.at ? s.at.slice(11, 16) : 'not yet';
+        return '<span class="lan-scan"><b>' + esc(s.name) + '</b> '
+             + s.count + ' devices, ' + s.infra + ' network'
+             + ' <span style="color:var(--muted-2)">' + esc(when) + '</span>'
+             + (s.error ? ' <span class="err">' + esc(s.error) + '</span>' : '')
+             + ' <button type="button" data-scan="' + s.id + '">Scan now</button></span>';
+      }).join('');
+
+      $('#lanBody').innerHTML = lanRows(r.devices)
+        + (r.truncated ? '<div class="lan-note">Showing the first 3000 rows. Use the search to narrow it down.</div>' : '');
+    });
+  }
+
+  function openLan() {
+    $('#lanSub').textContent = 'Reading...';
+    $('#lanBody').innerHTML = '<div class="lan-empty">Loading...</div>';
+    $('#lanScans').innerHTML = '';
+    open('#lanModal');
+    loadLan();
+  }
+
   // ------------------------------------------------------------------ modals
   function open(sel) { $(sel).classList.add('show'); }
   function close(sel) {
@@ -634,10 +728,28 @@
     if (e.target.classList && e.target.classList.contains('ovl')) { close('#' + e.target.id); return; }
 
     var listTile = e.target.closest('.tile-click');
-    if (listTile) { openDeviceList(listTile.getAttribute('data-list')); return; }
+    if (listTile) {
+      var kind = listTile.getAttribute('data-list');
+      if (kind === 'lan') openLan(); else openDeviceList(kind);
+      return;
+    }
 
     var b = e.target.closest('button');
     if (!b) return;
+
+    var scanId = b.getAttribute('data-scan');
+    if (scanId) {
+      b.disabled = true;
+      b.textContent = 'Scanning';
+      // The scan itself runs in the poller, not in this request, so the answer
+      // comes back at once and the list is re-read a moment later.
+      api('lan_scan', { id: parseInt(scanId, 10) }).then(function (r) {
+        toast(r.message, r.success ? 'ok' : 'bad');
+        if (!r.success) { loadLan(); return; }
+        setTimeout(loadLan, Math.max(3000, (state.pollSeconds || 5) * 1000 + 2000));
+      });
+      return;
+    }
     if (b.id === 'adminBtn')  { open('#loginModal'); $('#loginForm [name=username]').focus(); }
     if (b.id === 'logoutBtn') { api('logout', {}).then(function () { state.isAdmin = false; state.csrf = ''; refresh(); toast('Signed out.'); }); }
     if (b.id === 'addBtn')    openDevice(null);
@@ -669,6 +781,14 @@
       });
     }
   });
+
+  // Typing re-queries the database rather than filtering what is already drawn,
+  // so a search finds a device that is not in the current page of rows.
+  $('#lanSearch').addEventListener('input', function () {
+    clearTimeout(lanTimer);
+    lanTimer = setTimeout(loadLan, 250);
+  });
+  $('#lanInfra').addEventListener('change', loadLan);
 
   $('#delConfirm').addEventListener('click', function () {
     api('device_delete', { id: state.deleteId }).then(function (r) {

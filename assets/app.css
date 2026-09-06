@@ -171,6 +171,7 @@ a { color: var(--indigo); }
 .t-indigo  .val { color: var(--indigo); }  .t-indigo .ico  { background: var(--indigo-l); color: var(--indigo); border-color: #c7d2fe; }  .t-indigo:hover { border-color: #a5b4fc; }
 .t-blue    .val { color: var(--blue); }    .t-blue .ico    { background: #eff6ff; color: var(--blue); border-color: #bfdbfe; }           .t-blue:hover { border-color: #93c5fd; }
 .t-slate   .val { color: var(--ink); }     .t-slate .ico   { background: #f1f5f9; color: var(--ink-2); border-color: var(--line); }       .t-slate:hover { border-color: #cbd5e1; }
+.t-violet  .val { color: #7c3aed; }        .t-violet .ico  { background: #f5f3ff; color: #7c3aed; border-color: #ddd6fe; }         .t-violet:hover { border-color: #c4b5fd; }
 
 /* ------------------------------------------------------------------- cards */
 .card {
@@ -340,4 +341,59 @@ a { color: var(--indigo); }
   .hdr-in { padding: 12px 14px; }
   .wrap { padding: 16px 14px 40px; }
   .brand h1 { font-size: 16px; }
+}
+
+/* -------------------------------------------- connected devices behind a router */
+.modal.modal-wide { width: 900px; }
+
+.lan-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.lan-tools input[type=search] {
+  flex: 1 1 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px;
+  font-size: 13.5px; font-family: inherit; color: var(--ink); background: #fff; outline: none;
+}
+.lan-tools input[type=search]:focus { border-color: var(--indigo); box-shadow: 0 0 0 3px rgba(79,70,229,.12); }
+.lan-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+.lan-check input { width: 16px; height: 16px; accent-color: var(--indigo); }
+
+.lan-scans { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.lan-scan {
+  display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 6px 9px; background: var(--line-soft);
+}
+.lan-scan b { color: var(--ink); }
+.lan-scan .err { color: var(--rose); }
+.lan-scan button {
+  border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 3px 8px;
+  font-size: 11px; font-family: inherit; color: var(--ink-2); cursor: pointer;
+}
+.lan-scan button:hover { border-color: var(--indigo); color: var(--indigo); }
+.lan-scan button:disabled { opacity: .55; cursor: default; }
+
+.lan-wrap { max-height: 56vh; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+table.lan { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.lan th {
+  position: sticky; top: 0; background: #fff; text-align: left; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; z-index: 1;
+}
+table.lan td { padding: 9px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+table.lan tr:last-child td { border-bottom: none; }
+table.lan tr.infra { background: var(--indigo-l); }
+table.lan tr.off td { color: var(--muted-2); }
+.lan-name { font-weight: 700; color: var(--ink); }
+.lan-sub { font-size: 11px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.lan-mac { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--ink-2); }
+.lan-kind {
+  display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+  border: 1px solid var(--line); background: #fff; color: var(--ink-2); white-space: nowrap;
+}
+.lan-kind.k-net { background: var(--indigo-l); color: var(--indigo-d); border-color: #c7d2fe; }
+.lan-open { color: var(--indigo); text-decoration: none; font-weight: 600; white-space: nowrap; }
+.lan-open:hover { text-decoration: underline; }
+.lan-empty { padding: 26px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.lan-note { font-size: 11.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+
+@media (max-width: 760px) {
+  .modal.modal-wide { width: 100%; }
+  table.lan .hide-sm { display: none; }
 }

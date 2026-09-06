@@ -281,13 +281,25 @@ switch ($action) {
                    s.ram_total_mb, s.ram_free_mb, s.uptime, s.ros_version AS live_version, s.board,
                    s.identity, s.hotspot_users, s.ppp_users, s.wan_iface AS live_wan,
                    s.rx_bps, s.tx_bps, s.traffic_bytes, s.last_seen, s.last_try,
-                   s.net_ping_ms, s.net_ping_target, s.net_ping_err
+                   s.net_ping_ms, s.net_ping_target, s.net_ping_err,
+                   s.disco_at, s.disco_err
               FROM devices d LEFT JOIN status s ON s.device_id = d.id
              ORDER BY d.sort_order, d.id")->fetchAll();
 
+        // How many devices each router currently has behind it. One grouped query
+        // rather than a count per card.
+        $lan = [];
+        foreach ($db->query("SELECT device_id,
+                                    SUM(CASE WHEN online=1 THEN 1 ELSE 0 END) AS n,
+                                    SUM(CASE WHEN online=1 AND is_infra=1 THEN 1 ELSE 0 END) AS infra
+                               FROM lan_devices GROUP BY device_id")->fetchAll() as $l) {
+            $lan[(int)$l['device_id']] = ['n' => (int)$l['n'], 'infra' => (int)$l['infra']];
+        }
+
         $summary = ['onlineDevices' => 0, 'offlineDevices' => 0, 'disabledDevices' => 0,
                     'totalDevices' => count($rows), 'totalHotspotUsers' => 0, 'totalPppoeUsers' => 0,
-                    'totalDownloadBps' => 0, 'totalUploadBps' => 0, 'totalTrafficBytes' => 0];
+                    'totalDownloadBps' => 0, 'totalUploadBps' => 0, 'totalTrafficBytes' => 0,
+                    'totalLanDevices' => 0, 'totalInfraDevices' => 0];
 
         $devices = [];
         foreach ($rows as $r) {
@@ -304,6 +316,10 @@ switch ($action) {
                 $summary['totalUploadBps']    += (int)$r['tx_bps'];
             }
             $summary['totalTrafficBytes'] += (int)$r['traffic_bytes'];
+
+            $l = $lan[(int)$r['id']] ?? ['n' => 0, 'infra' => 0];
+            $summary['totalLanDevices']   += $l['n'];
+            $summary['totalInfraDevices'] += $l['infra'];
 
             $devices[] = [
                 'id'          => (int)$r['id'],
@@ -339,6 +355,10 @@ switch ($action) {
                 'trafficBytes'=> (int)$r['traffic_bytes'],
                 'lastSeen'    => $r['last_seen'],
                 'lastTry'     => $r['last_try'],
+                'lanDevices'  => $l['n'],
+                'lanInfra'    => $l['infra'],
+                'discoAt'     => $r['disco_at'],
+                'discoErr'    => (string)$r['disco_err'],
             ];
         }
         $summary['totalBandwidthBps'] = $summary['totalDownloadBps'] + $summary['totalUploadBps'];
@@ -895,6 +915,104 @@ switch ($action) {
             mt_out(['success' => false,
                     'message' => sprintf('Could not connect to %s:%d - %s', $host, $port, $e->getMessage())]);
         }
+        break;
+
+    /* ---------------------------------------------------------------- lan
+       Everything found behind the routers. Admin only, deliberately: this is a
+       list of his customers' MAC addresses and hostnames, which the public
+       summary endpoint has no business handing out. */
+    case 'lan':
+        mt_require_admin();
+        $only  = (int)($_GET['device_id'] ?? 0);
+        $q     = trim((string)($_GET['q'] ?? ''));
+        $infra = ($_GET['infra'] ?? '') === '1';
+
+        $sql  = "SELECT l.*, d.name AS router FROM lan_devices l
+                   JOIN devices d ON d.id = l.device_id WHERE 1=1";
+        $args = [];
+        if ($only > 0) { $sql .= " AND l.device_id = ?"; $args[] = $only; }
+        if ($infra)    { $sql .= " AND l.is_infra = 1"; }
+        if ($q !== '') {
+            $sql .= " AND (l.mac LIKE ? OR l.ip LIKE ? OR l.hostname LIKE ? OR l.vendor LIKE ?
+                           OR l.identity LIKE ? OR l.board LIKE ? OR l.comment LIKE ?)";
+            $like = '%' . $q . '%';
+            for ($i = 0; $i < 7; $i++) $args[] = $like;
+        }
+        // Network gear first, then whatever is online, then by router: the switch
+        // he is looking for should never be on page two behind 300 phones.
+        $sql .= " ORDER BY l.is_infra DESC, l.online DESC, d.sort_order, d.id, l.ip, l.mac LIMIT 3000";
+
+        $st = $db->prepare($sql);
+        $st->execute($args);
+        $out = [];
+        foreach ($st->fetchAll() as $r) {
+            $out[] = [
+                'id'       => (int)$r['id'],
+                'deviceId' => (int)$r['device_id'],
+                'router'   => $r['router'],
+                'mac'      => $r['mac'],
+                'ip'       => $r['ip'],
+                'hostname' => $r['hostname'],
+                'vendor'   => $r['vendor'],
+                'identity' => $r['identity'],
+                'platform' => $r['platform'],
+                'board'    => $r['board'],
+                'version'  => $r['version'],
+                'iface'    => $r['iface'],
+                'comment'  => $r['comment'],
+                'kind'     => $r['kind'],
+                'sources'  => $r['sources'],
+                'isInfra'  => (int)$r['is_infra'] === 1,
+                'online'   => (int)$r['online'] === 1,
+                'firstSeen'=> $r['first_seen'],
+                'lastSeen' => $r['last_seen'],
+                // Its own management page. Reachable from inside that network today;
+                // the tunnel that makes it work from anywhere is the next step, so
+                // the link is offered without pretending it always opens.
+                'mgmtUrl'  => ($r['is_infra'] && $r['ip'] !== '') ? 'http://' . $r['ip'] . '/' : '',
+            ];
+        }
+
+        $scans = [];
+        foreach ($db->query("SELECT d.id, d.name, s.disco_at, s.disco_count, s.disco_infra, s.disco_err
+                               FROM devices d LEFT JOIN status s ON s.device_id = d.id
+                              WHERE d.enabled = 1 ORDER BY d.sort_order, d.id")->fetchAll() as $s) {
+            $scans[] = ['id' => (int)$s['id'], 'name' => $s['name'], 'at' => $s['disco_at'],
+                        'count' => (int)$s['disco_count'], 'infra' => (int)$s['disco_infra'],
+                        'error' => (string)$s['disco_err']];
+        }
+
+        mt_out(['success' => true, 'devices' => $out, 'scans' => $scans,
+                'every' => (int)mt_setting('discover_every', 300),
+                'enabled' => mt_setting('discover_enabled', '1') === '1',
+                'truncated' => count($out) >= 3000]);
+        break;
+
+    /**
+     * Ask for a fresh scan of one router.
+     *
+     * Deliberately does NOT scan here. Reading three tables and rewriting a few
+     * hundred rows from inside a page request means a long write while the live
+     * bandwidth lane is writing every second, and SQLite serialises writers -
+     * that combination produced "database is locked" in about a quarter of the
+     * attempts when measured. Clearing the timestamp is one small write, and the
+     * poller then does the scan on its own turn, holding the poll lock like
+     * every other router read in this app.
+     */
+    case 'lan_scan':
+        mt_guard();
+        $b  = mt_body();
+        $id = (int)($b['id'] ?? 0);
+        $st = $db->prepare("SELECT name FROM devices WHERE id=?");
+        $st->execute([$id]);
+        $name = $st->fetchColumn();
+        if ($name === false) mt_out(['success' => false, 'message' => 'Router not found.'], 404);
+
+        mt_db_write($db, "UPDATE status SET disco_at=NULL WHERE device_id=?", [$id]);
+        mt_maybe_poll($db);
+
+        mt_out(['success' => true,
+                'message' => 'Scanning ' . $name . ' - the list updates in a few seconds.']);
         break;
 
     case 'device_interfaces':

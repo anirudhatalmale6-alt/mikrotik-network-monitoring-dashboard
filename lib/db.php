@@ -38,7 +38,17 @@ function mt_db() {
     $pdo->exec('PRAGMA busy_timeout = 5000');
     $pdo->exec('PRAGMA foreign_keys = ON');
 
-    mt_schema($pdo);
+    // Setting up the schema still writes on a fresh database or an upgrade, and
+    // another process may hold the file at that exact moment. Retry rather than
+    // fail the whole request - every statement in there is idempotent.
+    $deadline = microtime(true) + 6;
+    while (true) {
+        try { mt_schema($pdo); break; }
+        catch (Exception $e) {
+            if (stripos($e->getMessage(), 'locked') === false || microtime(true) >= $deadline) throw $e;
+            usleep(60000 + random_int(0, 90000));
+        }
+    }
     if ($fresh) @chmod(MT_DB_FILE, 0664);
     return $pdo;
 }
@@ -129,6 +139,37 @@ function mt_schema(PDO $db) {
 
     $db->exec("CREATE TABLE IF NOT EXISTS settings (k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '')");
 
+    // Everything found behind a router: the other network devices it can see, and
+    // the clients it has addresses for. One row per MAC per router - the same
+    // laptop behind two routers is genuinely two connections.
+    $db->exec("
+    CREATE TABLE IF NOT EXISTS lan_devices (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_id  INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        mac        TEXT NOT NULL,
+        ip         TEXT NOT NULL DEFAULT '',
+        hostname   TEXT NOT NULL DEFAULT '',
+        vendor     TEXT NOT NULL DEFAULT '',
+        -- What the device says about itself over MNDP / CDP / LLDP. Empty for an
+        -- ordinary client, filled in for a switch, radio or access point.
+        identity   TEXT NOT NULL DEFAULT '',
+        platform   TEXT NOT NULL DEFAULT '',
+        board      TEXT NOT NULL DEFAULT '',
+        version    TEXT NOT NULL DEFAULT '',
+        iface      TEXT NOT NULL DEFAULT '',
+        comment    TEXT NOT NULL DEFAULT '',
+        kind       TEXT NOT NULL DEFAULT '',
+        -- Which of the router's tables reported it, so a thin entry can be read
+        -- for what it is rather than looking like missing data.
+        sources    TEXT NOT NULL DEFAULT '',
+        is_infra   INTEGER NOT NULL DEFAULT 0,
+        online     INTEGER NOT NULL DEFAULT 1,
+        first_seen TEXT NOT NULL DEFAULT '',
+        last_seen  TEXT NOT NULL DEFAULT ''
+    )");
+    $db->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_lan_dev_mac ON lan_devices(device_id, mac)");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_lan_seen ON lan_devices(last_seen)");
+
     // Columns added after the first release. SQLite has no ADD COLUMN IF NOT EXISTS,
     // so check what the table already has - this must be safe to run on every start.
     mt_add_columns($db, 'status', [
@@ -149,6 +190,12 @@ function mt_schema(PDO $db) {
         'inline_rx'       => 'INTEGER',
         'inline_tx'       => 'INTEGER',
         'inline_at'       => 'REAL',
+        // The connected-device scan: it costs three extra round trips, so it runs
+        // on its own slow clock and remembers when it last ran and what it saw.
+        'disco_at'        => 'TEXT',
+        'disco_count'     => 'INTEGER',
+        'disco_infra'     => 'INTEGER',
+        'disco_err'       => "TEXT NOT NULL DEFAULT ''",
     ]);
 
     $defaults = [
@@ -165,9 +212,23 @@ function mt_schema(PDO $db) {
         // is as slow as the poll interval.
         'live_bandwidth' => '1',
         'api_timeout'    => '6',
+        // Connected-device discovery. Three extra reads per router, so minutes
+        // rather than seconds - the ARP and lease tables do not change any faster.
+        'discover_enabled'   => '1',
+        'discover_every'     => '300',   // seconds between scans, per router
+        'discover_keep_days' => '7',     // forget a device unseen for this long
     ];
-    $ins = $db->prepare("INSERT OR IGNORE INTO settings (k, v) VALUES (?, ?)");
-    foreach ($defaults as $k => $v) $ins->execute([$k, $v]);
+    // Read first, write only what is genuinely missing. INSERT OR IGNORE looks
+    // free but takes the write lock every time, and mt_schema() runs on EVERY
+    // request - so on a busy install this alone had every page view queueing
+    // behind the bandwidth lane, which writes once a second.
+    $have = [];
+    foreach ($db->query("SELECT k FROM settings")->fetchAll() as $r) $have[$r['k']] = true;
+    $missing = array_diff_key($defaults, $have);
+    if ($missing) {
+        $ins = $db->prepare("INSERT OR IGNORE INTO settings (k, v) VALUES (?, ?)");
+        foreach ($missing as $k => $v) $ins->execute([$k, $v]);
+    }
 
     // First run only: a default administrator, because there is no installer.
     // The dashboard shows a warning until this password is changed.
@@ -226,6 +287,58 @@ function mt_setting_now(PDO $db, $key, $default = '') {
 function mt_bw_alive(PDO $db, $withinSeconds = 8) {
     $hb = (int)mt_setting_now($db, 'bw_alive', 0);
     return $hb > 0 && (time() - $hb) <= $withinSeconds;
+}
+
+/**
+ * Writing while something else is writing.
+ *
+ * Three processes write this file: the poller, the live bandwidth lane (which
+ * writes every second) and the page request itself. SQLite serialises writers,
+ * and here its own waiting does not happen - measured, not assumed:
+ *
+ *  - PDO::beginTransaction() sends a plain BEGIN, which starts as a reader and
+ *    asks for the write lock later. SQLite refuses that upgrade outright rather
+ *    than risk a deadlock: 26 failures in 90 attempts under load.
+ *  - BEGIN IMMEDIATE fixes that one, but on its own still came back "database is
+ *    locked" after 0 ms with the bandwidth lane running - the busy handler is
+ *    never invoked, with either PRAGMA busy_timeout or PDO::ATTR_TIMEOUT. Both
+ *    were tried; both still failed 4 times in 12.
+ *
+ * So the waiting is done here, which depends on none of that. Contention is
+ * retried; a real error (bad SQL, constraint) is raised at once.
+ */
+function mt_is_busy_error($message) {
+    return stripos($message, 'locked') !== false || stripos($message, 'busy') !== false;
+}
+
+function mt_begin_write(PDO $db, $waitSeconds = 6) {
+    $deadline = microtime(true) + $waitSeconds;
+    while (true) {
+        try {
+            $db->exec('BEGIN IMMEDIATE');
+            return true;
+        } catch (Exception $e) {
+            if (!mt_is_busy_error($e->getMessage())) throw $e;
+            if (microtime(true) >= $deadline) return false;
+            // Jittered, so two waiters do not keep colliding on the same beat.
+            usleep(60000 + random_int(0, 90000));
+        }
+    }
+}
+
+/** One statement, with the same waiting. Returns the statement. */
+function mt_db_write(PDO $db, $sql, array $args = [], $waitSeconds = 6) {
+    $deadline = microtime(true) + $waitSeconds;
+    while (true) {
+        try {
+            $st = $db->prepare($sql);
+            $st->execute($args);
+            return $st;
+        } catch (Exception $e) {
+            if (!mt_is_busy_error($e->getMessage()) || microtime(true) >= $deadline) throw $e;
+            usleep(60000 + random_int(0, 90000));
+        }
+    }
 }
 
 /** The poller runs for weeks; without this it would never notice a setting change. */

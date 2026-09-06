@@ -287,6 +287,25 @@ function mt_asset($rel) {
   </div>
 </div>
 
+<!-- ------------------------------------------------- what is connected behind the routers -->
+<div class="ovl" id="lanModal">
+  <div class="modal modal-wide">
+    <div class="modal-hd">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><circle cx="4" cy="5" r="2"/><circle cx="20" cy="5" r="2"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="19" r="2"/><line x1="10.5" y1="10.5" x2="5.5" y2="6"/><line x1="13.5" y1="10.5" x2="18.5" y2="6"/><line x1="10.5" y1="13.5" x2="5.5" y2="18"/><line x1="13.5" y1="13.5" x2="18.5" y2="18"/></svg></div>
+      <div><h3>Connected devices</h3><p id="lanSub">Everything the routers can see behind them.</p></div>
+    </div>
+    <div class="modal-bd">
+      <div class="lan-tools">
+        <input type="search" id="lanSearch" placeholder="Search IP, MAC, name, vendor or model">
+        <label class="lan-check"><input type="checkbox" id="lanInfra"> Network devices only</label>
+      </div>
+      <div id="lanScans" class="lan-scans"></div>
+      <div id="lanBody" class="lan-wrap"></div>
+    </div>
+    <div class="modal-ft"><button type="button" class="btn btn-slate" data-close>Close</button></div>
+  </div>
+</div>
+
 <div class="toasts" id="toasts"></div>
 <script src="<?= mt_asset('assets/app.js') ?>"></script>
 </body>

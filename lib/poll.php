@@ -308,6 +308,26 @@ function mt_poll_device(PDO $db, array $dev) {
                ->execute([$dev['id'], $nowTs, $rxBps, $txBps]);
         }
 
+        // What is connected behind this router. Three more round trips, so it runs
+        // on its own clock - a few minutes apart - and never on the interval that
+        // the bandwidth figures depend on. Its failure is recorded, not thrown:
+        // a router that will not list its leases is still a router being monitored.
+        if (mt_setting('discover_enabled', '1') === '1') {
+            $dEvery = max(60, (int)mt_setting('discover_every', 300));
+            $dAt    = $prev['disco_at'] ?? null;
+            if (!$dAt || (time() - strtotime($dAt)) >= $dEvery) {
+                require_once __DIR__ . '/discover.php';
+                try {
+                    list($dCount, $dInfra, $dErr) = mt_discover($ros, $db, $dev['id']);
+                } catch (Exception $e) {
+                    list($dCount, $dInfra, $dErr) = [0, 0, $e->getMessage()];
+                }
+                mt_db_write($db, "UPDATE status SET disco_at=?, disco_count=?, disco_infra=?, disco_err=?
+                                  WHERE device_id=?",
+                            [date('Y-m-d H:i:s'), $dCount, $dInfra, $dErr, $dev['id']]);
+            }
+        }
+
         $ros->close();
         return ['online' => true, 'error' => ''];
     } catch (Exception $e) {
