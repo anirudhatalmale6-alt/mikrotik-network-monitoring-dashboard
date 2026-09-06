@@ -1,0 +1,318 @@
+[151190] [Sun Sep  6 17:10:08 2026] PHP 8.3.6 Development Server (http://127.0.0.1:8912) started
+[151191] [Sun Sep  6 17:10:08 2026] PHP 8.3.6 Development Server (http://127.0.0.1:8912) started
+[151192] [Sun Sep  6 17:10:08 2026] PHP 8.3.6 Development Server (http://127.0.0.1:8912) started
+[151193] [Sun Sep  6 17:10:08 2026] PHP 8.3.6 Development Server (http://127.0.0.1:8912) started
+[151194] [Sun Sep  6 17:10:08 2026] PHP 8.3.6 Development Server (http://127.0.0.1:8912) started
+[151185] [Sun Sep  6 17:10:08 2026] PHP 8.3.6 Development Server (http://127.0.0.1:8912) started
+[151195] [Sun Sep  6 17:10:08 2026] PHP 8.3.6 Development Server (http://127.0.0.1:8912) started
+[151193] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151195] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151185] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57380 Accepted
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57380 [200]: POST /api.php?action=login
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57380 Closing
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57396 Accepted
+[151195] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151185] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57396 [401]: GET /device.php?id=1
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57396 Closing
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57408 Accepted
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57408 [200]: GET /device.php?id=1
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57408 Closing
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57410 Accepted
+[151195] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57410 [200]: GET /device.php/1/
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57410 Closing
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57426 Accepted
+[151185] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151195] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57426 [200]: GET /device.php/1/style.css
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57426 Closing
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57430 Accepted
+[151185] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151195] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151193] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57430 [200]: GET /api.php?action=lan
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57430 Closing
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57434 Accepted
+[151193] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151194] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151190] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57434 [409]: GET /device.php?id=11
+[151192] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57434 Closing
+[151185] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151194] [Sun Sep  6 17:10:57 2026] Failed to poll event
+[151195] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57436 Accepted
+[151195] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57436 [409]: GET /device.php?id=11
+[151195] [Sun Sep  6 17:10:57 2026] 127.0.0.1:57436 Closing
+[151194] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151195] [Sun Sep  6 17:11:08 2026] 127.0.0.1:44602 Accepted
+[151195] [Sun Sep  6 17:11:08 2026] 127.0.0.1:44602 [200]: GET /api.php?action=lan
+[151195] [Sun Sep  6 17:11:08 2026] 127.0.0.1:44602 Closing
+[151193] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151195] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:08 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:08 2026] 127.0.0.1:44604 Accepted
+[151190] [Sun Sep  6 17:11:16 2026] 127.0.0.1:44604 [502]: GET /device.php/3/
+[151190] [Sun Sep  6 17:11:16 2026] 127.0.0.1:44604 Closing
+[151194] [Sun Sep  6 17:11:16 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:16 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:16 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:16 2026] 127.0.0.1:46284 Accepted
+[151191] [Sun Sep  6 17:11:24 2026] 127.0.0.1:46284 [502]: GET /device.php/3/
+[151191] [Sun Sep  6 17:11:24 2026] 127.0.0.1:46284 Closing
+[151191] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38258 Accepted
+[151190] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38258 [200]: GET /
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38258 Closing
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38272 Accepted
+[151190] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38282 Accepted
+[151190] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38272 [200]: GET /assets/app.css?v=1788714608
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38272 Closing
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38282 [200]: GET /assets/app.js?v=1788714599
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38282 Closing
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38294 Accepted
+[151194] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38306 Accepted
+[151194] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38294 [200]: HEAD /data/monitor.sqlite
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38294 Closing
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38306 [200]: GET /api.php?action=summary
+[151193] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38306 Closing
+[151195] [Sun Sep  6 17:11:37 2026] 127.0.0.1:38308 Accepted
+[151193] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:37 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:40 2026] 127.0.0.1:38316 Accepted
+[151185] [Sun Sep  6 17:11:40 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:40 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:40 2026] 127.0.0.1:38316 [200]: POST /api.php?action=login
+[151193] [Sun Sep  6 17:11:40 2026] 127.0.0.1:38316 Closing
+[151193] [Sun Sep  6 17:11:40 2026] 127.0.0.1:38324 Accepted
+[151190] [Sun Sep  6 17:11:40 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:40 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:40 2026] 127.0.0.1:38324 [200]: GET /api.php?action=summary
+[151193] [Sun Sep  6 17:11:40 2026] 127.0.0.1:38324 Closing
+[151193] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38330 Accepted
+[151194] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38330 [200]: GET /device.php?id=1
+[151193] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38330 Closing
+[151185] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38346 Accepted
+[151193] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38346 [200]: GET /device.php/1/
+[151185] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38346 Closing
+[151185] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38352 Accepted
+[151194] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38364 Accepted
+[151185] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38352 [200]: GET /device.php/1/style.css
+[151185] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38352 Closing
+[151194] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38364 [200]: GET /device.php/1/logo.svg
+[151194] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38364 Closing
+[151192] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38368 Accepted
+[151190] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:42 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38368 [200]: GET /api.php?action=summary
+[151192] [Sun Sep  6 17:11:42 2026] 127.0.0.1:38368 Closing
+[151192] [Sun Sep  6 17:11:44 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:44 2026] 127.0.0.1:35092 Accepted
+[151190] [Sun Sep  6 17:11:44 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:44 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:47 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:47 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:47 2026] 127.0.0.1:35100 Accepted
+[151192] [Sun Sep  6 17:11:47 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:52 2026] 127.0.0.1:35092 [502]: GET /device.php/3/
+[151185] [Sun Sep  6 17:11:52 2026] 127.0.0.1:35100 [200]: GET /api.php?action=summary
+[151194] [Sun Sep  6 17:11:52 2026] 127.0.0.1:35092 Closing
+[151185] [Sun Sep  6 17:11:52 2026] 127.0.0.1:35100 Closing
+[151191] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48334 Accepted
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48334 [200]: GET /
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48334 Closing
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48340 Accepted
+[151191] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48356 Accepted
+[151192] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48340 [200]: GET /assets/app.css?v=1788714608
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48340 Closing
+[151191] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48356 [200]: GET /assets/app.js?v=1788714599
+[151191] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48356 Closing
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48368 Accepted
+[151191] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48370 Accepted
+[151191] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48368 [200]: HEAD /data/monitor.sqlite
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48368 Closing
+[151191] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48384 Accepted
+[151194] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:53 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48384 [200]: GET /api.php?action=stream
+[151191] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48384 Closing
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48370 [200]: GET /api.php?action=summary
+[151192] [Sun Sep  6 17:11:53 2026] 127.0.0.1:48370 Closing
+[151192] [Sun Sep  6 17:11:54 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:54 2026] 127.0.0.1:48392 Accepted
+[151193] [Sun Sep  6 17:11:54 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:54 2026] Failed to poll event
+[151185] [Sun Sep  6 17:11:54 2026] Failed to poll event
+[151194] [Sun Sep  6 17:11:54 2026] 127.0.0.1:48392 [200]: GET /api.php?action=live
+[151194] [Sun Sep  6 17:11:54 2026] 127.0.0.1:48392 Closing
+[151194] [Sun Sep  6 17:11:55 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48394 Accepted
+[151192] [Sun Sep  6 17:11:55 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:55 2026] Failed to poll event
+[151192] [Sun Sep  6 17:11:55 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48400 Accepted
+[151194] [Sun Sep  6 17:11:55 2026] Failed to poll event
+[151193] [Sun Sep  6 17:11:55 2026] Failed to poll event
+[151191] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48400 [200]: GET /api.php?action=live
+[151191] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48400 Closing
+[151193] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48394 [200]: GET /api.php?action=lan
+[151193] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48394 Closing
+[151190] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48402 Accepted
+[151193] [Sun Sep  6 17:11:55 2026] Failed to poll event
+[151190] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48402 [409]: GET /device.php?id=11
+[151190] [Sun Sep  6 17:11:55 2026] 127.0.0.1:48402 Closing
+[151195] [Sun Sep  6 17:11:57 2026] 127.0.0.1:38308 [200]: GET /api.php?action=stream
+[151195] [Sun Sep  6 17:11:57 2026] 127.0.0.1:38308 Closing
+[151190] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151195] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37308 Accepted
+[151191] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151195] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37308 [200]: GET /api.php?action=lan
+[151195] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37308 Closing
+[151194] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37322 Accepted
+[151191] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151195] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151192] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37322 [409]: GET /device.php?id=11
+[151194] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37322 Closing
+[151191] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37328 Accepted
+[151192] [Sun Sep  6 17:12:42 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37328 [200]: GET /device.php/1/
+[151194] [Sun Sep  6 17:12:42 2026] 127.0.0.1:37328 Closing
+[151194] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42590 Accepted
+[151191] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151185] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42590 [200]: GET /
+[151194] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42590 Closing
+[151194] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42606 Accepted
+[151191] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42622 Accepted
+[151194] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42606 [200]: GET /assets/app.css?v=1788714608
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42622 [200]: GET /assets/app.js?v=1788714599
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42606 Closing
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42622 Closing
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42634 Accepted
+[151194] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42634 [200]: HEAD /data/monitor.sqlite
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42634 Closing
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42640 Accepted
+[151194] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151190] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151192] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42650 Accepted
+[151190] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151192] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151185] [Sun Sep  6 17:12:53 2026] Failed to poll event
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42640 [200]: GET /api.php?action=summary
+[151193] [Sun Sep  6 17:12:53 2026] 127.0.0.1:42640 Closing
+[151190] [Sun Sep  6 17:12:55 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:55 2026] 127.0.0.1:49396 Accepted
+[151185] [Sun Sep  6 17:12:55 2026] Failed to poll event
+[151192] [Sun Sep  6 17:12:55 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:55 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:55 2026] 127.0.0.1:49396 [200]: POST /api.php?action=login
+[151191] [Sun Sep  6 17:12:55 2026] 127.0.0.1:49396 Closing
+[151191] [Sun Sep  6 17:12:55 2026] 127.0.0.1:49402 Accepted
+[151185] [Sun Sep  6 17:12:55 2026] Failed to poll event
+[151195] [Sun Sep  6 17:12:55 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:55 2026] 127.0.0.1:49402 [200]: GET /api.php?action=summary
+[151191] [Sun Sep  6 17:12:55 2026] 127.0.0.1:49402 Closing
+[151191] [Sun Sep  6 17:12:57 2026] 127.0.0.1:49410 Accepted
+[151195] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151185] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151190] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:57 2026] 127.0.0.1:49410 [200]: GET /api.php?action=lan
+[151191] [Sun Sep  6 17:12:57 2026] 127.0.0.1:49410 Closing
+[151190] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:57 2026] 127.0.0.1:49426 Accepted
+[151185] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151192] [Sun Sep  6 17:12:57 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:57 2026] 127.0.0.1:49426 [409]: GET /device.php?id=11
+[151191] [Sun Sep  6 17:12:57 2026] 127.0.0.1:49426 Closing
+[151194] [Sun Sep  6 17:12:58 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:58 2026] 127.0.0.1:49432 Accepted
+[151192] [Sun Sep  6 17:12:58 2026] Failed to poll event
+[151185] [Sun Sep  6 17:12:58 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:58 2026] 127.0.0.1:49432 [200]: GET /api.php?action=summary
+[151191] [Sun Sep  6 17:12:58 2026] 127.0.0.1:49432 Closing
+[151185] [Sun Sep  6 17:12:58 2026] 127.0.0.1:49442 Accepted
+[151190] [Sun Sep  6 17:12:58 2026] Failed to poll event
+[151194] [Sun Sep  6 17:12:58 2026] Failed to poll event
+[151191] [Sun Sep  6 17:12:58 2026] Failed to poll event
+[151192] [Sun Sep  6 17:13:03 2026] Failed to poll event
+[151194] [Sun Sep  6 17:13:03 2026] Failed to poll event
+[151191] [Sun Sep  6 17:13:03 2026] Failed to poll event
+[151195] [Sun Sep  6 17:13:03 2026] 127.0.0.1:43480 Accepted
+[151185] [Sun Sep  6 17:13:06 2026] 127.0.0.1:49442 [502]: GET /device.php/3/
+[151195] [Sun Sep  6 17:13:06 2026] 127.0.0.1:43480 [200]: GET /api.php?action=summary
+[151185] [Sun Sep  6 17:13:06 2026] 127.0.0.1:49442 Closing
+[151195] [Sun Sep  6 17:13:06 2026] 127.0.0.1:43480 Closing
+[151195] [Sun Sep  6 17:13:07 2026] 127.0.0.1:43484 Accepted
+[151191] [Sun Sep  6 17:13:07 2026] Failed to poll event
+[151192] [Sun Sep  6 17:13:07 2026] Failed to poll event
+[151190] [Sun Sep  6 17:13:07 2026] Failed to poll event
+[151185] [Sun Sep  6 17:13:07 2026] Failed to poll event
+[151195] [Sun Sep  6 17:13:07 2026] 127.0.0.1:43484 [200]: GET /api.php?action=lan
+[151195] [Sun Sep  6 17:13:07 2026] 127.0.0.1:43484 Closing
+[151194] [Sun Sep  6 17:13:08 2026] Failed to poll event
+[151192] [Sun Sep  6 17:13:08 2026] 127.0.0.1:43488 Accepted
+[151191] [Sun Sep  6 17:13:08 2026] Failed to poll event
+[151195] [Sun Sep  6 17:13:08 2026] Failed to poll event
+[151192] [Sun Sep  6 17:13:08 2026] 127.0.0.1:43488 [200]: GET /api.php?action=lan&infra=1
+[151192] [Sun Sep  6 17:13:08 2026] 127.0.0.1:43488 Closing
+[151193] [Sun Sep  6 17:13:13 2026] 127.0.0.1:42650 [200]: GET /api.php?action=stream
+[151193] [Sun Sep  6 17:13:13 2026] 127.0.0.1:42650 Closing

@@ -663,9 +663,13 @@
            + '<td class="hide-sm">' + esc(d.router) + (d.iface ? '<div class="lan-sub">' + esc(d.iface) + '</div>' : '') + '</td>'
            + '<td>' + (d.online ? '<span class="pill pill-on"><span class="d"></span>Online</span>'
                                 : '<span class="pill pill-off"><span class="d"></span>' + esc((d.lastSeen || '').slice(0, 16)) + '</span>') + '</td>'
-           + '<td>' + (d.mgmtUrl
-                ? '<a class="lan-open" href="' + esc(d.mgmtUrl) + '" target="_blank" rel="noopener">Open</a>'
-                : '') + '</td>'
+           + '<td>' + (d.proxyUrl
+                ? '<a class="lan-open" href="' + esc(d.proxyUrl) + '" target="_blank" rel="noopener"'
+                  + ' title="Opens through the router, from anywhere">Open</a>'
+                : d.mgmtUrl
+                  ? '<a class="lan-open dim" href="' + esc(d.mgmtUrl) + '" target="_blank" rel="noopener"'
+                    + ' title="This is the device\'s own address. It only opens from a browser already on that network - switch on the router\'s SOCKS port to reach it from anywhere.">Open</a>'
+                  : '') + '</td>'
            + '</tr>';
     }).join('');
 
@@ -931,6 +935,7 @@
       f.description.value = dev.description;
       f.rosVersion.value = dev.rosVersion;
       f.board.value = dev.board || '';
+      f.socksPort.value = dev.socksPort || 0;
       f.enabled.checked = dev.enabled;
       if (dev.wanIface) {
         sel.innerHTML += '<option value="' + esc(dev.wanIface) + '" selected>' + esc(dev.wanIface) + ' (current)</option>';

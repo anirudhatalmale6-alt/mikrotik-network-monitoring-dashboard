@@ -350,6 +350,7 @@ switch ($action) {
                 'hotspotUsers'=> $online ? (int)$r['hotspot_users'] : 0,
                 'pppoeUsers'  => $online ? (int)$r['ppp_users'] : 0,
                 'wanIface'    => (string)($r['live_wan'] ?: $r['wan_iface']),
+                'socksPort'   => (int)$r['socks_port'],
                 'downloadBps' => $online ? (int)$r['rx_bps'] : 0,
                 'uploadBps'   => $online ? (int)$r['tx_bps'] : 0,
                 'trafficBytes'=> (int)$r['traffic_bytes'],
@@ -802,6 +803,9 @@ switch ($action) {
             'description' => trim((string)($b['description'] ?? '')),
             'ros_version' => trim((string)($b['rosVersion'] ?? '')),
             'wan_iface'   => trim((string)($b['wanIface'] ?? '')),
+            // The router's own SOCKS port. 0 = off, and device.php then shows the
+            // commands to switch it on rather than just failing to connect.
+            'socks_port'  => max(0, min(65535, (int)($b['socksPort'] ?? 0))),
             'enabled'     => !empty($b['enabled']) ? 1 : 0,
         ];
 
@@ -927,7 +931,7 @@ switch ($action) {
         $q     = trim((string)($_GET['q'] ?? ''));
         $infra = ($_GET['infra'] ?? '') === '1';
 
-        $sql  = "SELECT l.*, d.name AS router FROM lan_devices l
+        $sql  = "SELECT l.*, d.name AS router, d.socks_port FROM lan_devices l
                    JOIN devices d ON d.id = l.device_id WHERE 1=1";
         $args = [];
         if ($only > 0) { $sql .= " AND l.device_id = ?"; $args[] = $only; }
@@ -969,7 +973,12 @@ switch ($action) {
                 // Its own management page. Reachable from inside that network today;
                 // the tunnel that makes it work from anywhere is the next step, so
                 // the link is offered without pretending it always opens.
+                // Through the router when its SOCKS proxy is on - that works from
+                // anywhere. Otherwise the device's own address, which only opens
+                // for a browser already inside that network; the UI says which.
                 'mgmtUrl'  => ($r['is_infra'] && $r['ip'] !== '') ? 'http://' . $r['ip'] . '/' : '',
+                'proxyUrl' => ($r['ip'] !== '' && (int)$r['socks_port'] > 0)
+                                ? 'device.php?id=' . (int)$r['id'] : '',
             ];
         }
 

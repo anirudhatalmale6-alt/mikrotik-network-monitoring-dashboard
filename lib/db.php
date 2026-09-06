@@ -172,6 +172,13 @@ function mt_schema(PDO $db) {
 
     // Columns added after the first release. SQLite has no ADD COLUMN IF NOT EXISTS,
     // so check what the table already has - this must be safe to run on every start.
+    // How this server gets onto the network behind a router: the SOCKS proxy
+    // RouterOS already has. 0 means it is not switched on for that router, and
+    // device.php then explains how rather than failing silently.
+    mt_add_columns($db, 'devices', [
+        'socks_port' => 'INTEGER NOT NULL DEFAULT 0',
+    ]);
+
     mt_add_columns($db, 'status', [
         // The router's OWN ping to the internet. Different from ping_ms, which is this
         // server's ping TO the router: two different directions over two different

@@ -397,3 +397,5 @@ table.lan tr.off td { color: var(--muted-2); }
   .modal.modal-wide { width: 100%; }
   table.lan .hide-sm { display: none; }
 }
+.lan-open.dim { color: var(--muted); }
+.lan-open.dim:hover { color: var(--ink-2); }

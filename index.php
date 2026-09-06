@@ -151,6 +151,9 @@ function mt_asset($rel) {
           <div class="f full"><label>Speed is measured on interface</label>
             <select name="wanIface"><option value="">Detect automatically from the default route</option></select>
             <span class="hint">A router counts the same traffic on the bridge and on its member ports, so the speed is read from one interface only.</span></div>
+          <div class="f full"><label>Router SOCKS port (to open devices behind it)</label>
+            <input type="number" name="socksPort" value="0" min="0" max="65535" placeholder="0">
+            <span class="hint">0 = off. Set this to the port you enabled with <code>/ip/socks</code> on the router (1080 is usual) and the dashboard can open the web page of any device behind it. Restrict it to this server's address in <code>/ip/socks/access</code>.</span></div>
           <label class="f-check"><input type="checkbox" name="enabled" checked> Monitoring enabled</label>
         </div>
         <div class="result" id="deviceResult"></div>
