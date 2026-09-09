@@ -113,10 +113,10 @@ function mt_router_ping(RouterOs $ros, $target, $count = 3) {
  * VPN tunnel installs one too without being an internet feed. Preference:
  * PPPoE/LTE session, then a physical port, and a tunnel only as a last resort.
  */
-function mt_detect_wan(RouterOs $ros, array $ifaces) {
+function mt_detect_wan(array $routes, array $ifaces) {
     $candidates = [];
     try {
-        foreach ($ros->query('/ip/route/print') as $r) {
+        foreach ($routes as $r) {
             $dst = trim((string)($r['dst-address'] ?? ''));
             if ($dst !== '0.0.0.0/0' && $dst !== '::/0') continue;
             if (isset($r['active']) && in_array(strtolower($r['active']), ['false', 'no'], true)) continue;
@@ -128,7 +128,7 @@ function mt_detect_wan(RouterOs $ros, array $ifaces) {
             if ($g !== '' && !preg_match('/\d/', $g)) $candidates[] = $g;   // bare interface name
         }
     } catch (Exception $e) {
-        // No route table access - fall through to the name-based guess below.
+        // No route table - fall through to the name-based guess below.
     }
 
     $types = [];
@@ -164,251 +164,383 @@ function mt_detect_wan(RouterOs $ros, array $ifaces) {
 }
 
 /**
- * Poll one device and write its status row.
- * Returns ['online'=>bool, 'error'=>string].
+ * Write one device's status row from data already fetched.
+ *
+ * Kept separate from the fetching so there is exactly one place that decides
+ * what a reading means - the rate maths, the wrong-port guard and the live-lane
+ * rule are subtle enough that having a second copy of them would guarantee the
+ * two drifted apart.
  */
-function mt_poll_device(PDO $db, array $dev) {
-    $timeout = max(2, (int)mt_setting('api_timeout', 6));
-    // $now is stamped later, at the moment the byte counters are actually read.
-    // Timing it from the start of the poll instead would divide the bytes by an
-    // interval that includes the connect and login round trips, which vary.
-    $now = $nowTs = null;
+function mt_store_poll(PDO $db, array $dev, array $prev, array $d) {
+    $r        = $d['resource'];
+    $ifaces   = $d['ifaces'];
+    $routes   = $d['routes'];
+    $totalMem = (int)($r['total-memory'] ?? 0);
+    $freeMem  = (int)($r['free-memory'] ?? 0);
+    $ramPct   = $totalMem > 0 ? (int)round(($totalMem - $freeMem) / $totalMem * 100) : 0;
 
-    $db->prepare("INSERT OR IGNORE INTO status (device_id) VALUES (?)")->execute([$dev['id']]);
-    $prev = $db->prepare("SELECT * FROM status WHERE device_id=?");
-    $prev->execute([$dev['id']]);
-    $prev = $prev->fetch() ?: [];
+    $identity = $d['identity'] !== '' ? $d['identity'] : (string)($prev['identity'] ?? '');
+    $hotspot  = (int)$d['hotspot'];
+    $ppp      = (int)$d['ppp'];
 
-    $ros = new RouterOs($timeout);
-    try {
-        $tcpMs = $ros->connect($dev['host'], $dev['api_port'], $dev['username'], $dev['password']);
-    } catch (Exception $e) {
-        $db->prepare("UPDATE status SET online=0, error=?, conn_status=?, ping_ms=0, rx_bps=0, tx_bps=0,
-                      hotspot_users=0, ppp_users=0, cpu=0, ram_pct=0, last_try=? WHERE device_id=?")
-           ->execute([$e->getMessage(), 'Unreachable: ' . $e->getMessage(), date('Y-m-d H:i:s'), $dev['id']]);
-        return ['online' => false, 'error' => $e->getMessage()];
+    // Stamp the reading at the moment the counters were read, not at the start of
+    // the poll: dividing the bytes by an interval that includes the connect and
+    // login round trips would make the rate depend on how slow the login was.
+    $nowTs = (int)$d['ts'];
+    $now   = date('Y-m-d H:i:s', $nowTs);
+
+    $wan = trim((string)$dev['wan_iface']);
+    if ($wan === '' || !array_filter($ifaces, function ($i) use ($wan) { return $i['name'] === $wan; })) {
+        $wan = mt_detect_wan($routes, $ifaces);
+        if ($wan !== '') {
+            $db->prepare("UPDATE devices SET wan_iface=? WHERE id=?")->execute([$wan, $dev['id']]);
+        }
     }
 
-    try {
-        list($pingMs, $pingSrc) = mt_ping($dev['host'], $tcpMs);
+    /**
+     * Guard against measuring the wrong port.
+     *
+     * The interface exists, so the check above is happy, but it is a port that
+     * carries nothing - an unused ether, or the WAN from before the ISP was
+     * moved. Its counters never move, so the dashboard reports 0 bps and 0 bytes
+     * for ever while CPU, memory, uptime and the user count all keep updating.
+     *
+     * Byte counters are cumulative since boot, so one reading settles it: a port
+     * that has passed a few kilobytes next to one that has passed hundreds of
+     * gigabytes is not the internet feed.
+     */
+    $wanBytes = null;
+    $busiest = ['name' => '', 'bytes' => 0];
+    foreach ($ifaces as $i) {
+        $bytes = (int)($i['rx-byte'] ?? 0) + (int)($i['tx-byte'] ?? 0);
+        if ($i['name'] === $wan) $wanBytes = $bytes;
+        if (($i['running'] ?? '') !== 'true') continue;
+        if (($i['disabled'] ?? 'false') === 'true') continue;
+        if ($bytes > $busiest['bytes']) $busiest = ['name' => $i['name'], 'bytes' => $bytes];
+    }
 
-        $res  = $ros->query('/system/resource/print');
-        $r    = $res[0] ?? [];
-        $totalMem = (int)($r['total-memory'] ?? 0);
-        $freeMem  = (int)($r['free-memory'] ?? 0);
-        $ramPct   = $totalMem > 0 ? (int)round(($totalMem - $freeMem) / $totalMem * 100) : 0;
-
-        // Identity is cosmetic and costs a whole round trip - half a second on these
-        // routers. Read it the first time and then leave it to the slow lane below,
-        // rather than paying for it on every single poll.
-        $identity = (string)($prev['identity'] ?? '');
-        if ($identity === '') {
-            try { $id = $ros->query('/system/identity/print'); $identity = (string)($id[0]['name'] ?? ''); }
-            catch (Exception $e) { /* keep the stored one */ }
-        }
-
-        // A router without a hotspot or without PPP is normal, not a fault.
-        $hotspot = 0;
-        try { $hotspot = count($ros->query('/ip/hotspot/active/print')); } catch (Exception $e) {}
-        $ppp = 0;
-        try { $ppp = count($ros->query('/ppp/active/print')); } catch (Exception $e) {}
-
-        $ifaces = $ros->query('/interface/print');
-        // Stamp the reading here: these are the counters the rate is computed from.
-        $nowTs = time();
-        $now   = date('Y-m-d H:i:s', $nowTs);
-
-        $wan = trim((string)$dev['wan_iface']);
-        if ($wan === '' || !array_filter($ifaces, function ($i) use ($wan) { return $i['name'] === $wan; })) {
-            $wan = mt_detect_wan($ros, $ifaces);
-            if ($wan !== '') {
-                $db->prepare("UPDATE devices SET wan_iface=? WHERE id=?")->execute([$wan, $dev['id']]);
-            }
-        }
-
-        /**
-         * Guard against measuring the wrong port.
-         *
-         * The interface exists, so the check above is happy, but it is a port
-         * that carries nothing - an unused ether, or the WAN before the ISP was
-         * moved to a different one. Its counters never move, so the dashboard
-         * reports 0 bps and 0 bytes measured for ever, while CPU, memory, uptime
-         * and the user count all keep updating. The router looks dead in exactly
-         * the half of the card that matters, and nothing says why.
-         *
-         * Byte counters are cumulative since boot, so one reading is enough to
-         * tell: a port that has passed a few kilobytes in days, next to one that
-         * has passed hundreds of gigabytes, is not the internet feed.
-         */
-        $wanBytes = null;
-        $busiest = ['name' => '', 'bytes' => 0];
-        foreach ($ifaces as $i) {
-            $bytes = (int)($i['rx-byte'] ?? 0) + (int)($i['tx-byte'] ?? 0);
-            if ($i['name'] === $wan) $wanBytes = $bytes;
-            if (($i['running'] ?? '') !== 'true') continue;
-            if (($i['disabled'] ?? 'false') === 'true') continue;
-            if ($bytes > $busiest['bytes']) $busiest = ['name' => $i['name'], 'bytes' => $bytes];
-        }
-
-        $wanNote = '';
-        if ($wanBytes !== null && $busiest['bytes'] > 10000000 && $wanBytes < $busiest['bytes'] / 100) {
-            // Re-detect rather than jumping to the busiest interface: a bridge and
-            // its member port both count the same packet, and the default route is
-            // what says which one of them is the real feed.
-            $again = mt_detect_wan($ros, $ifaces);
-            $pick  = ($again !== '' && $again !== $wan) ? $again : $busiest['name'];
-            if ($pick !== '' && $pick !== $wan) {
-                $wanNote = 'No traffic was passing on ' . $wan . ', so the speed is now read from ' . $pick . '.';
-                $wan = $pick;
-                $db->prepare("UPDATE devices SET wan_iface=? WHERE id=?")->execute([$wan, $dev['id']]);
-                // The stored counters belong to the old interface. Keeping them
-                // would produce one enormous fake spike on the next poll.
-                $prev['last_rx'] = null;
-                $prev['last_tx'] = null;
-            } else {
-                $wanNote = 'No traffic is passing on ' . $wan . ' - check which port faces the internet.';
-            }
-        }
-
-        $rx = $tx = 0;
-        foreach ($ifaces as $i) {
-            if ($i['name'] === $wan) { $rx = (int)($i['rx-byte'] ?? 0); $tx = (int)($i['tx-byte'] ?? 0); }
-        }
-
-        // Counters are cumulative since boot. Two readings make a rate; a counter
-        // that went backwards means the router rebooted, and that sample is dropped
-        // rather than drawn as an enormous spike.
-        $rxBps = $txBps = 0;
-        $moved = 0;
-        if (!empty($prev['last_at']) && $prev['last_rx'] !== null) {
-            $elapsed = $nowTs - strtotime($prev['last_at']);
-            $maxGap  = max(60, (int)mt_setting('poll_seconds', 10) * 10);
-            if ($elapsed > 0 && $elapsed <= $maxGap && $rx >= (int)$prev['last_rx'] && $tx >= (int)$prev['last_tx']) {
-                $dRx = $rx - (int)$prev['last_rx'];
-                $dTx = $tx - (int)$prev['last_tx'];
-                $rxBps = (int)round($dRx * 8 / $elapsed);
-                $txBps = (int)round($dTx * 8 / $elapsed);
-                $moved = $dRx + $dTx;
-            }
-        }
-
-        // The router's own internet ping, refreshed on a slower clock than the rest
-        // because each packet costs about a second of the poll.
-        $netMs     = isset($prev['net_ping_ms']) ? $prev['net_ping_ms'] : null;
-        $netTarget = (string)($prev['net_ping_target'] ?? '');
-        $netAt     = $prev['net_ping_at'] ?? null;
-        $netErr    = (string)($prev['net_ping_err'] ?? '');
-        $target    = trim((string)mt_setting('net_ping_target', '8.8.8.8'));
-        $every     = max(15, (int)mt_setting('net_ping_every', 60));
-        // Back off after a failure: a router whose API user lacks the permission
-        // must not be asked every minute forever.
-        if ($netErr !== '') $every = max($every, 600);
-        if ($target !== '' && (!$netAt || (time() - strtotime($netAt)) >= $every)) {
-            list($netMs, $netErr) = mt_router_ping($ros, $target);
-            $netTarget = $target;
-            $netAt = $now;
-            // Same slow clock: catch a router that has been renamed, without paying
-            // for the question on every poll.
-            try { $id = $ros->query('/system/identity/print'); $identity = (string)($id[0]['name'] ?? $identity); }
-            catch (Exception $e) {}
-        }
-
-        /**
-         * Keep the explanation on screen for a few hours after the interface was
-         * switched. Without this the note is written on the one poll that made
-         * the change and wiped by the next one five seconds later - he would see
-         * the figures come back to life and never learn why they had been zero.
-         */
-        $noteAt = $prev['wan_note_at'] ?? null;
-        if ($wanNote !== '') {
-            $noteAt = $now;
+    $wanNote = '';
+    if ($wanBytes !== null && $busiest['bytes'] > 10000000 && $wanBytes < $busiest['bytes'] / 100) {
+        // Re-detect rather than jumping to the busiest interface: a bridge and its
+        // member port both count the same packet, and the default route is what
+        // says which of them is the real feed.
+        $again = mt_detect_wan($routes, $ifaces);
+        $pick  = ($again !== '' && $again !== $wan) ? $again : $busiest['name'];
+        if ($pick !== '' && $pick !== $wan) {
+            $wanNote = 'No traffic was passing on ' . $wan . ', so the speed is now read from ' . $pick . '.';
+            $wan = $pick;
+            $db->prepare("UPDATE devices SET wan_iface=? WHERE id=?")->execute([$wan, $dev['id']]);
+            // The stored counters belong to the old interface; keeping them would
+            // draw one enormous fake spike on the next poll.
+            $prev['last_rx'] = null;
+            $prev['last_tx'] = null;
         } else {
-            $prevNote = (string)($prev['wan_note'] ?? '');
-            if ($prevNote !== '' && $noteAt && (time() - strtotime($noteAt)) < 21600) {
-                $wanNote = $prevNote;          // still recent: leave it up
-            } else {
-                $noteAt = null;
-            }
+            $wanNote = 'No traffic is passing on ' . $wan . ' - check which port faces the internet.';
         }
-
-        $conn = 'Connected (RouterOS API' . (isset($r['version']) && $r['version'] !== '' ? ' ' . explode(' ', $r['version'])[0] : '') . ')';
-
-        // Whoever wrote this row's speed most recently owns it. That is the lane when
-        // it is streaming, but also the direct reader on a host where no lane can
-        // run - and checking only for the lane meant the poll overwrote the direct
-        // reader's figure every cycle, dropping it to zero whenever this poll had no
-        // usable pair of counters of its own.
-        $bwFresh  = !empty($prev['bw_at']) && (time() - strtotime($prev['bw_at'])) <= 10;
-        $liveLane = mt_bw_alive($db) || $bwFresh;
-        if ($liveLane) { $rxBps = (int)$prev['rx_bps']; $txBps = (int)$prev['tx_bps']; }
-
-        $db->prepare("UPDATE status SET online=1, error='', conn_status=?, ping_ms=?, ping_source=?,
-                        cpu=?, ram_pct=?, ram_total_mb=?, ram_free_mb=?, uptime=?, ros_version=?, board=?,
-                        identity=?, hotspot_users=?, ppp_users=?, wan_iface=?, wan_note=?, wan_note_at=?, rx_bps=?, tx_bps=?,
-                        last_rx=?, last_tx=?, traffic_bytes=traffic_bytes+?, last_at=?, last_seen=?, last_try=?,
-                        net_ping_ms=?, net_ping_target=?, net_ping_at=?, net_ping_err=?
-                      WHERE device_id=?")
-           ->execute([
-               $conn, $pingMs, $pingSrc,
-               (int)($r['cpu-load'] ?? 0), $ramPct,
-               (int)round($totalMem / 1048576), (int)round($freeMem / 1048576),
-               mt_uptime_text($r['uptime'] ?? ''), (string)($r['version'] ?? ''), (string)($r['board-name'] ?? ''),
-               $identity, $hotspot, $ppp, $wan, $wanNote, $noteAt, $rxBps, $txBps,
-               $rx, $tx, max(0, $moved), $now, $now, $now,
-               $netMs, $netTarget, $netAt, $netErr,
-               $dev['id'],
-           ]);
-
-        // Keep the reported RouterOS version in the device record in step with
-        // reality, so the admin form is not showing a value from an old firmware.
-        if (!empty($r['version'])) {
-            $db->prepare("UPDATE devices SET ros_version=? WHERE id=?")->execute([(string)$r['version'], $dev['id']]);
-        }
-
-        if (!$liveLane && ($rxBps > 0 || $txBps > 0 || $moved > 0)) {
-            $db->prepare("INSERT INTO samples (device_id, ts, rx_bps, tx_bps) VALUES (?,?,?,?)")
-               ->execute([$dev['id'], $nowTs, $rxBps, $txBps]);
-        }
-
-        // What is connected behind this router. Three more round trips, so it runs
-        // on its own clock - a few minutes apart - and never on the interval that
-        // the bandwidth figures depend on. Its failure is recorded, not thrown:
-        // a router that will not list its leases is still a router being monitored.
-        if (mt_setting('discover_enabled', '1') === '1') {
-            $dEvery = max(60, (int)mt_setting('discover_every', 300));
-            $dAt    = $prev['disco_at'] ?? null;
-            if (!$dAt || (time() - strtotime($dAt)) >= $dEvery) {
-                require_once __DIR__ . '/discover.php';
-                try {
-                    list($dCount, $dInfra, $dErr) = mt_discover($ros, $db, $dev['id']);
-                } catch (Exception $e) {
-                    list($dCount, $dInfra, $dErr) = [0, 0, $e->getMessage()];
-                }
-                mt_db_write($db, "UPDATE status SET disco_at=?, disco_count=?, disco_infra=?, disco_err=?
-                                  WHERE device_id=?",
-                            [date('Y-m-d H:i:s'), $dCount, $dInfra, $dErr, $dev['id']]);
-            }
-        }
-
-        $ros->close();
-        return ['online' => true, 'error' => ''];
-    } catch (Exception $e) {
-        $ros->close();
-        $db->prepare("UPDATE status SET online=0, error=?, conn_status=?, last_try=? WHERE device_id=?")
-           ->execute([$e->getMessage(), 'Error: ' . $e->getMessage(), date('Y-m-d H:i:s'), $dev['id']]);
-        return ['online' => false, 'error' => $e->getMessage()];
     }
+
+    $rx = $tx = 0;
+    foreach ($ifaces as $i) {
+        if ($i['name'] === $wan) { $rx = (int)($i['rx-byte'] ?? 0); $tx = (int)($i['tx-byte'] ?? 0); }
+    }
+
+    // Counters are cumulative since boot. Two readings make a rate; a counter that
+    // went backwards means the router rebooted, and that sample is dropped rather
+    // than drawn as an enormous spike.
+    $rxBps = $txBps = 0;
+    $moved = 0;
+    if (!empty($prev['last_at']) && $prev['last_rx'] !== null) {
+        $elapsed = $nowTs - strtotime($prev['last_at']);
+        $maxGap  = max(60, (int)mt_setting('poll_seconds', 10) * 10);
+        if ($elapsed > 0 && $elapsed <= $maxGap && $rx >= (int)$prev['last_rx'] && $tx >= (int)$prev['last_tx']) {
+            $dRx = $rx - (int)$prev['last_rx'];
+            $dTx = $tx - (int)$prev['last_tx'];
+            $rxBps = (int)round($dRx * 8 / $elapsed);
+            $txBps = (int)round($dTx * 8 / $elapsed);
+            $moved = $dRx + $dTx;
+        }
+    }
+
+    // The router's own ping to the internet, on its slower clock.
+    $netMs     = isset($prev['net_ping_ms']) ? $prev['net_ping_ms'] : null;
+    $netTarget = (string)($prev['net_ping_target'] ?? '');
+    $netAt     = $prev['net_ping_at'] ?? null;
+    $netErr    = (string)($prev['net_ping_err'] ?? '');
+    if ($d['netPing'] !== null) {
+        list($netMs, $netErr) = $d['netPing'];
+        $netTarget = (string)$d['netTarget'];
+        $netAt = $now;
+    }
+
+    /**
+     * Keep the explanation on screen for a few hours after the interface was
+     * switched. Without this the note is written by the one poll that made the
+     * change and wiped by the next one seconds later - he would see the figures
+     * come back to life and never learn why they had been zero.
+     */
+    $noteAt = $prev['wan_note_at'] ?? null;
+    if ($wanNote !== '') {
+        $noteAt = $now;
+    } else {
+        $prevNote = (string)($prev['wan_note'] ?? '');
+        if ($prevNote !== '' && $noteAt && (time() - strtotime($noteAt)) < 21600) {
+            $wanNote = $prevNote;          // still recent: leave it up
+        } else {
+            $noteAt = null;
+        }
+    }
+
+    $conn = 'Connected (RouterOS API' . (isset($r['version']) && $r['version'] !== '' ? ' ' . explode(' ', $r['version'])[0] : '') . ')';
+
+    // Whoever wrote this row's speed most recently owns it: the lane when it is
+    // streaming, but also the direct reader on a host where no lane can run.
+    // Checking only for the lane meant the poll overwrote the direct reader's
+    // figure every cycle, dropping it to zero whenever this poll had no usable
+    // pair of counters of its own.
+    $bwFresh  = !empty($prev['bw_at']) && (time() - strtotime($prev['bw_at'])) <= 10;
+    $liveLane = mt_bw_alive($db) || $bwFresh;
+    if ($liveLane) { $rxBps = (int)$prev['rx_bps']; $txBps = (int)$prev['tx_bps']; }
+
+    mt_db_write($db, "UPDATE status SET online=1, error='', conn_status=?, ping_ms=?, ping_source=?,
+                    cpu=?, ram_pct=?, ram_total_mb=?, ram_free_mb=?, uptime=?, ros_version=?, board=?,
+                    identity=?, hotspot_users=?, ppp_users=?, wan_iface=?, wan_note=?, wan_note_at=?, rx_bps=?, tx_bps=?,
+                    last_rx=?, last_tx=?, traffic_bytes=traffic_bytes+?, last_at=?, last_seen=?, last_try=?,
+                    net_ping_ms=?, net_ping_target=?, net_ping_at=?, net_ping_err=?
+                  WHERE device_id=?",
+        [
+            $conn, round((float)$d['tcpMs'], 1), 'tcp',
+            (int)($r['cpu-load'] ?? 0), $ramPct,
+            (int)round($totalMem / 1048576), (int)round($freeMem / 1048576),
+            mt_uptime_text($r['uptime'] ?? ''), (string)($r['version'] ?? ''), (string)($r['board-name'] ?? ''),
+            $identity, $hotspot, $ppp, $wan, $wanNote, $noteAt, $rxBps, $txBps,
+            $rx, $tx, max(0, $moved), $now, $now, $now,
+            $netMs, $netTarget, $netAt, $netErr,
+            $dev['id'],
+        ]);
+
+    // Keep the reported RouterOS version in the device record in step with
+    // reality, so the admin form is not showing a value from an old firmware.
+    if (!empty($r['version'])) {
+        $db->prepare("UPDATE devices SET ros_version=? WHERE id=?")->execute([(string)$r['version'], $dev['id']]);
+    }
+
+    if (!$liveLane && ($rxBps > 0 || $txBps > 0 || $moved > 0)) {
+        $db->prepare("INSERT INTO samples (device_id, ts, rx_bps, tx_bps) VALUES (?,?,?,?)")
+           ->execute([$dev['id'], $nowTs, $rxBps, $txBps]);
+    }
+
+    if ($d['disco'] !== null) {
+        list($dCount, $dInfra, $dErr) = $d['disco'];
+        mt_db_write($db, "UPDATE status SET disco_at=?, disco_count=?, disco_infra=?, disco_err=?
+                          WHERE device_id=?",
+                    [date('Y-m-d H:i:s'), $dCount, $dInfra, $dErr, $dev['id']]);
+    }
+
+    return ['online' => true, 'error' => ''];
 }
 
-/** Poll every enabled device once. */
+/** Is this device due for one of the things that runs on a slower clock? */
+function mt_poll_due(array $prev) {
+    $netErr = (string)($prev['net_ping_err'] ?? '');
+    $every  = max(15, (int)mt_setting('net_ping_every', 60));
+    // Back off after a failure: a router whose API user lacks the permission must
+    // not be asked every minute for ever.
+    if ($netErr !== '') $every = max($every, 600);
+    $netAt  = $prev['net_ping_at'] ?? null;
+    $target = trim((string)mt_setting('net_ping_target', '8.8.8.8'));
+    $net    = $target !== '' && (!$netAt || (time() - strtotime($netAt)) >= $every);
+
+    $disco = false;
+    if (mt_setting('discover_enabled', '1') === '1') {
+        $dEvery = max(60, (int)mt_setting('discover_every', 300));
+        $dAt    = $prev['disco_at'] ?? null;
+        $disco  = !$dAt || (time() - strtotime($dAt)) >= $dEvery;
+    }
+    return ['net' => $net, 'disco' => $disco, 'target' => $target];
+}
+
+/**
+ * Poll a list of devices, all at the same time.
+ *
+ * Everything here is waiting on the network, so the routers are worked on
+ * together rather than one after another, and each one is asked everything it
+ * needs in a single tagged batch. Ten routers 160 ms away took 24 seconds one at
+ * a time; this is about one round trip regardless of how many there are.
+ *
+ * Returns [device_id => ['online'=>bool, 'error'=>string]].
+ */
+function mt_poll_many(PDO $db, array $devs) {
+    require_once __DIR__ . '/parallel.php';
+    require_once __DIR__ . '/discover.php';
+
+    $timeout = max(2, (int)mt_setting('api_timeout', 6));
+    $out = [];
+    if (!$devs) return $out;
+
+    $prevs = [];
+    foreach ($devs as $dev) {
+        $db->prepare("INSERT OR IGNORE INTO status (device_id) VALUES (?)")->execute([$dev['id']]);
+        $st = $db->prepare("SELECT * FROM status WHERE device_id=?");
+        $st->execute([$dev['id']]);
+        $prevs[$dev['id']] = $st->fetch() ?: [];
+    }
+
+    $conns = mt_par_open($devs, $timeout);
+    mt_par_login($conns, $timeout);
+
+    // One batch for the things every poll needs. count-only on the session tables
+    // matters: a busy hotspot answers /ip/hotspot/active/print with hundreds of
+    // rows, and the dashboard only ever shows the number.
+    $commands = [
+        'res'   => ['/system/resource/print'],
+        'if'    => ['/interface/print'],
+        'route' => ['/ip/route/print'],
+        'hs'    => ['/ip/hotspot/active/print', '=count-only='],
+        'ppp'   => ['/ppp/active/print', '=count-only='],
+    ];
+    mt_par_batch($conns, $commands, $timeout + 6);
+    $ts = time();
+    // Keep this batch's answers: the slow batch below reuses $c->results, and
+    // reading them afterwards would hand back the wrong set - which showed up as
+    // every router reporting "did not answer /system/resource" while its figures
+    // were plainly being collected.
+    foreach ($conns as $c) $c->fastResults = $c->results;
+
+    // A second batch, only for the routers due for something slow, and again all
+    // at once. The router's own ping costs about a second per packet, so it must
+    // never sit in front of the traffic figures.
+    $slow = [];
+    foreach ($conns as $c) {
+        if (!$c->alive()) continue;
+        $prev = $prevs[$c->dev['id']];
+        $due  = mt_poll_due($prev);
+        $c->due = $due;
+        $cmds = [];
+        if ((string)($prev['identity'] ?? '') === '' || $due['net']) {
+            $cmds['ident'] = ['/system/identity/print'];
+        }
+        if ($due['net'])   $cmds['ping'] = ['/ping', '=address=' . $due['target'], '=count=2'];
+        if ($due['disco']) {
+            $cmds['nb']    = ['/ip/neighbor/print'];
+            $cmds['arp']   = ['/ip/arp/print'];
+            $cmds['lease'] = ['/ip/dhcp-server/lease/print'];
+        }
+        if ($cmds) { $c->slowCmds = $cmds; $slow[] = $c; }
+    }
+    if ($slow) {
+        // Every slow batch has the same shape per connection, but mt_par_batch
+        // sends one command list to all of them - so group by that list.
+        $groups = [];
+        foreach ($slow as $c) $groups[implode(',', array_keys($c->slowCmds))][] = $c;
+        foreach ($groups as $g) {
+            mt_par_batch($g, $g[0]->slowCmds, $timeout + 8);
+            foreach ($g as $c) $c->slowResults = $c->results;
+        }
+    }
+
+    foreach ($conns as $c) {
+        $dev  = $c->dev;
+        $prev = $prevs[$dev['id']];
+        if (!$c->alive()) {
+            $err = $c->err !== '' ? $c->err : 'connection failed';
+            mt_db_write($db, "UPDATE status SET online=0, error=?, conn_status=?, ping_ms=0, rx_bps=0, tx_bps=0,
+                              hotspot_users=0, ppp_users=0, cpu=0, ram_pct=0, last_try=? WHERE device_id=?",
+                        [$err, 'Unreachable: ' . $err, date('Y-m-d H:i:s'), $dev['id']]);
+            $out[$dev['id']] = ['online' => false, 'error' => $err];
+            continue;
+        }
+
+        $fast = $c->fastResults;                   // from the first batch
+        $slowR = isset($c->slowResults) ? $c->slowResults : [];
+
+        $res = $fast['res'][0] ?? null;
+        if ($res === null) {
+            $err = 'the router did not answer /system/resource';
+            mt_db_write($db, "UPDATE status SET online=0, error=?, conn_status=?, last_try=? WHERE device_id=?",
+                        [$err, 'Error: ' . $err, date('Y-m-d H:i:s'), $dev['id']]);
+            $out[$dev['id']] = ['online' => false, 'error' => $err];
+            continue;
+        }
+
+        // count-only answers with =ret=N and no rows; a router with no hotspot
+        // traps instead, which leaves no result at all - both mean "none".
+        $countOf = function ($tag) use ($fast) {
+            if (!isset($fast[$tag][0]['ret'])) return 0;
+            return (int)$fast[$tag][0]['ret'];
+        };
+
+        $netPing = null;
+        if (isset($slowR['ping'])) {
+            $best = null;
+            foreach ($slowR['ping'] as $row) {
+                if (isset($row['status']) && $row['status'] !== '' && stripos($row['status'], 'timeout') !== false) continue;
+                $ms = mt_duration_ms($row['time'] ?? '');
+                if ($ms === null) continue;
+                if ($best === null || $ms < $best) $best = $ms;
+            }
+            $netPing = $best === null
+                ? [null, 'no reply from ' . $c->due['target']]
+                : [round($best, 1), ''];
+        } elseif (!empty($c->due['net'])) {
+            // Asked for and not answered: the API user needs the "test" policy.
+            $netPing = [null, 'API user needs the "test" permission on the router'];
+        }
+
+        $disco = null;
+        if (!empty($c->due['disco'])) {
+            $errs = [];
+            if (!isset($slowR['lease'])) $errs[] = 'DHCP leases: not available on this router';
+            try {
+                $disco = mt_discover_store($db, $dev['id'],
+                    $slowR['nb'] ?? [], $slowR['arp'] ?? [], $slowR['lease'] ?? [], $errs);
+            } catch (Exception $e) {
+                $disco = [0, 0, $e->getMessage()];
+            }
+        }
+
+        try {
+            $out[$dev['id']] = mt_store_poll($db, $dev, $prev, [
+                'tcpMs'     => $c->tcpMs,
+                'resource'  => $res,
+                'identity'  => (string)($slowR['ident'][0]['name'] ?? ''),
+                'hotspot'   => $countOf('hs'),
+                'ppp'       => $countOf('ppp'),
+                'ifaces'    => $fast['if'] ?? [],
+                'routes'    => $fast['route'] ?? [],
+                'ts'        => $ts,
+                'netPing'   => $netPing,
+                'netTarget' => $c->due['target'] ?? '',
+                'disco'     => $disco,
+            ]);
+        } catch (Exception $e) {
+            mt_db_write($db, "UPDATE status SET online=0, error=?, conn_status=?, last_try=? WHERE device_id=?",
+                        [$e->getMessage(), 'Error: ' . $e->getMessage(), date('Y-m-d H:i:s'), $dev['id']]);
+            $out[$dev['id']] = ['online' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    mt_par_close($conns);
+    return $out;
+}
+
+/**
+ * Poll one device. The same path as a full poll, with a list of one - there is
+ * no second implementation to drift out of step.
+ */
+function mt_poll_device(PDO $db, array $dev) {
+    $r = mt_poll_many($db, [$dev]);
+    return $r[$dev['id']] ?? ['online' => false, 'error' => 'no result'];
+}
+
 function mt_poll_all(PDO $db, $verbose = false) {
     // Claim the slot for the interval gate in api.php, so a page request and the
     // background service do not both decide it is their turn.
     mt_set_setting('last_poll_started', (string)time());
     $devs = $db->query("SELECT * FROM devices WHERE enabled=1 ORDER BY sort_order, id")->fetchAll();
-    foreach ($devs as $d) {
-        $r = mt_poll_device($db, $d);
-        if ($verbose) {
+    $res  = mt_poll_many($db, $devs);
+    if ($verbose) {
+        foreach ($devs as $d) {
+            $r = $res[$d['id']] ?? ['online' => false, 'error' => 'no result'];
             printf("%-22s %s%s\n", $d['name'], $r['online'] ? 'online' : 'OFFLINE',
                    $r['error'] !== '' ? '  (' . $r['error'] . ')' : '');
         }

@@ -89,6 +89,23 @@ class RouterOs
         return true;
     }
 
+    /**
+     * Take over a socket that is already connected and logged in.
+     *
+     * The parallel opener logs in to every router at once; this hands the result
+     * to the ordinary blocking client so the streaming code does not need its own
+     * copy of the protocol. Refuses a socket with bytes still unread, because
+     * those bytes belong to a reply nobody has parsed yet and dropping them would
+     * put every later read one place out of step.
+     */
+    public function adopt($sock, $leftover = '') {
+        if (!is_resource($sock) || $leftover !== '') return false;
+        stream_set_blocking($sock, true);
+        stream_set_timeout($sock, $this->timeout);
+        $this->sock = $sock;
+        return true;
+    }
+
     public function close() {
         if ($this->sock) { @fclose($this->sock); $this->sock = null; }
     }

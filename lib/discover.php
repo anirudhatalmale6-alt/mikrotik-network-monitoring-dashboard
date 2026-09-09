@@ -92,8 +92,26 @@ function mt_device_kind($vendor, $platform, $board) {
  * of the whole scan - the other two still count, and the reason is reported.
  */
 function mt_discover(RouterOs $ros, PDO $db, $deviceId) {
+    $neighbors = $arp = $leases = [];
+    $errs = [];
+    try { $neighbors = $ros->query('/ip/neighbor/print'); }
+    catch (Exception $e) { $errs[] = 'neighbours: ' . $e->getMessage(); }
+    try { $arp = $ros->query('/ip/arp/print'); }
+    catch (Exception $e) { $errs[] = 'ARP: ' . $e->getMessage(); }
+    try { $leases = $ros->query('/ip/dhcp-server/lease/print'); }
+    catch (Exception $e) { $errs[] = 'DHCP leases: ' . $e->getMessage(); }
+    return mt_discover_store($db, $deviceId, $neighbors, $arp, $leases, $errs);
+}
+
+/**
+ * The same work, but from rows already in hand.
+ *
+ * The parallel poller asks for the three tables in the same round trip as
+ * everything else, so it has the rows before this is called and must not go
+ * back to the router for them.
+ */
+function mt_discover_store(PDO $db, $deviceId, array $neighbors, array $arp, array $leases, array $errs = []) {
     $found = [];   // MAC => row
-    $errs  = [];
 
     $row = function ($mac) use (&$found) {
         $mac = mt_mac_norm($mac);
@@ -114,8 +132,8 @@ function mt_discover(RouterOs $ros, PDO $db, $deviceId) {
     };
 
     // 1. The devices that announce themselves: MNDP, CDP and LLDP.
-    try {
-        foreach ($ros->query('/ip/neighbor/print') as $n) {
+    {
+        foreach ($neighbors as $n) {
             $mac = $row($n['mac-address'] ?? '');
             if ($mac === null) continue;
             $found[$mac]['is_infra'] = 1;
@@ -129,11 +147,11 @@ function mt_discover(RouterOs $ros, PDO $db, $deviceId) {
             // LLDP switches often send only this, and it names the model.
             if ($found[$mac]['platform'] === '') $fill($mac, 'platform', $n['system-description'] ?? '');
         }
-    } catch (Exception $e) { $errs[] = 'neighbours: ' . $e->getMessage(); }
+    }
 
     // 2. Everything the router has an address for.
-    try {
-        foreach ($ros->query('/ip/arp/print') as $a) {
+    {
+        foreach ($arp as $a) {
             if (($a['invalid'] ?? 'false') === 'true') continue;
             $mac = $row($a['mac-address'] ?? '');
             if ($mac === null) continue;
@@ -142,11 +160,11 @@ function mt_discover(RouterOs $ros, PDO $db, $deviceId) {
             $fill($mac, 'iface', $a['interface'] ?? '');
             $fill($mac, 'comment', $a['comment'] ?? '');
         }
-    } catch (Exception $e) { $errs[] = 'ARP: ' . $e->getMessage(); }
+    }
 
     // 3. The name the client asked for. A router with no DHCP server is normal.
-    try {
-        foreach ($ros->query('/ip/dhcp-server/lease/print') as $l) {
+    {
+        foreach ($leases as $l) {
             $mac = $row($l['mac-address'] ?? ($l['active-mac-address'] ?? ''));
             if ($mac === null) continue;
             $found[$mac]['sources']['dhcp'] = 1;
@@ -154,7 +172,7 @@ function mt_discover(RouterOs $ros, PDO $db, $deviceId) {
             $fill($mac, 'hostname', $l['host-name'] ?? '');
             $fill($mac, 'comment', $l['comment'] ?? '');
         }
-    } catch (Exception $e) { $errs[] = 'DHCP leases: ' . $e->getMessage(); }
+    }
 
     if (!$found && $errs) {
         return [0, 0, implode('; ', $errs)];

@@ -104,9 +104,9 @@ function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false, $onTick = null) {
         // than a count: connecting them all at once is what makes the numbers start
         // moving immediately after a restart, but a row of dead routers must not be
         // able to hold the loop for the whole timeout each pass.
-        $budget = microtime(true) + 3.0;
+        $pending = [];
+        $ifaceOf = [];
         foreach ($devs as $d) {
-            if (microtime(true) > $budget) break;
             $id = (int)$d['id'];
             if (isset($conns[$id])) continue;
             if (isset($retryAt[$id]) && $now < $retryAt[$id]) continue;
@@ -116,26 +116,49 @@ function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false, $onTick = null) {
             // bridge and its member port.
             $iface = trim((string)($d['wan_iface'] !== '' ? $d['wan_iface'] : $d['live_wan']));
             if ($iface === '') { $retryAt[$id] = $now + 30; continue; }
+            $ifaceOf[$id] = $iface;
+            $pending[] = $d;
+        }
 
-            // Deliberately shorter than the poller's timeout. This connect happens
-            // between two readings that are due every second, so it has to fail fast;
-            // a router that needs more than a couple of seconds to answer cannot
-            // keep up a per-second stream anyway.
-            $ros = new RouterOs(2);
-            try {
-                $ros->connect($d['host'], $d['api_port'], $d['username'], $d['password']);
-                $ros->startStream('/interface/monitor-traffic', ['=interface=' . $iface]);
-                $conns[$id] = ['ros' => $ros, 'iface' => $iface, 'name' => $d['name']];
-                unset($fails[$id]);
-                $say('streaming ' . $d['name'] . ' on ' . $iface);
-            } catch (Exception $e) {
-                $ros->close();
+        /**
+         * Open them all together.
+         *
+         * This used to connect one router after another inside a three second
+         * budget, so with ten routers only the first few got a stream on each
+         * pass - and the browser reconnects this stream about every minute, so
+         * the slow start happened again and again. Connecting in parallel makes
+         * the whole fleet start streaming at once.
+         */
+        if ($pending) {
+            require_once __DIR__ . '/parallel.php';
+            $opened = mt_par_open($pending, 2);
+            mt_par_login($opened, 2);
+            foreach ($opened as $c) {
+                $id = (int)$c->dev['id'];
+                if ($c->alive() && $c->rbuf === '') {
+                    $ros = new RouterOs(2);
+                    if ($ros->adopt($c->sock, $c->rbuf)) {
+                        $c->sock = null;               // ownership moved to $ros
+                        try {
+                            $ros->startStream('/interface/monitor-traffic',
+                                              ['=interface=' . $ifaceOf[$id]]);
+                            $conns[$id] = ['ros' => $ros, 'iface' => $ifaceOf[$id], 'name' => $c->dev['name']];
+                            unset($fails[$id]);
+                            $say('streaming ' . $c->dev['name'] . ' on ' . $ifaceOf[$id]);
+                            continue;
+                        } catch (Exception $e) {
+                            $ros->close();
+                            $c->err = $e->getMessage();
+                        }
+                    }
+                }
                 // Back off, and keep backing off: a router that refuses every time
                 // must cost less and less, not the same every twenty seconds.
                 $fails[$id] = min(5, (int)($fails[$id] ?? 0) + 1);
                 $retryAt[$id] = $now + min(300, 15 * (1 << ($fails[$id] - 1)));
-                $say('cannot stream ' . $d['name'] . ': ' . $e->getMessage());
+                $say('cannot stream ' . $c->dev['name'] . ': ' . ($c->err !== '' ? $c->err : 'connect failed'));
             }
+            mt_par_close($opened);
         }
 
         if (!$conns) {
@@ -233,7 +256,7 @@ function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false, $onTick = null) {
  * and it keeps its own counters so it cannot disturb the full poll's rate.
  */
 function mt_bw_inline(PDO $db, $budget = 2.5) {
-    $deadline = microtime(true) + $budget;
+    require_once __DIR__ . '/parallel.php';
 
     // One at a time. Two requests each taking a reading would measure against each
     // other's baseline and invent rates that never happened.
@@ -241,49 +264,65 @@ function mt_bw_inline(PDO $db, $budget = 2.5) {
     if ($lock === false || $lock === null) return false;
 
     try {
-        $devs = $db->query("SELECT d.id, d.host, d.api_port, d.username, d.password,
+        $devs = $db->query("SELECT d.id, d.name, d.host, d.api_port, d.username, d.password,
                                    d.wan_iface, s.wan_iface AS live_wan,
                                    s.inline_rx, s.inline_tx, s.inline_at
                               FROM devices d JOIN status s ON s.device_id = d.id
                              WHERE d.enabled = 1 AND s.online = 1
                              ORDER BY d.sort_order, d.id")->fetchAll();
-        foreach ($devs as $d) {
-            if (microtime(true) > $deadline) break;
-            $iface = trim((string)($d['wan_iface'] !== '' ? $d['wan_iface'] : $d['live_wan']));
-            if ($iface === '') continue;
 
-            $ros = new RouterOs(3);
-            try {
-                $ros->connect($d['host'], $d['api_port'], $d['username'], $d['password']);
-                $rows = $ros->query('/interface/print',
-                                    ['?name=' . $iface, '=.proplist=name,rx-byte,tx-byte']);
-                $ros->close();
-            } catch (Exception $e) {
-                $ros->close();
-                continue;               // the full poll is what decides reachability
-            }
-            if (!$rows) continue;
+        /**
+         * Every router at once.
+         *
+         * This used to connect to them one after another inside a time budget,
+         * and stop when the budget ran out. With three routers that was fine.
+         * With ten, each costing about half a second, the budget was spent
+         * before the end of the list - so the routers at the bottom had their
+         * speed read almost never, and looked like they were passing no traffic.
+         * That is not a slow dashboard, it is a dashboard that never asked.
+         */
+        if ($devs) {
+            $conns = mt_par_open($devs, 4);
+            mt_par_login($conns, 4);
+            // One uniform command, and the interface picked from the reply here:
+            // a per-router filter would need a different command per connection
+            // for no saving - the whole list is a handful of rows.
+            mt_par_batch($conns, ['if' => ['/interface/print', '=.proplist=name,rx-byte,tx-byte']], 6);
 
-            $rx = (int)($rows[0]['rx-byte'] ?? 0);
-            $tx = (int)($rows[0]['tx-byte'] ?? 0);
-            $now = microtime(true);
+            foreach ($conns as $c) {
+                if (!$c->alive()) continue;          // the full poll decides reachability
+                $d = $c->dev;
+                $iface = trim((string)($d['wan_iface'] !== '' ? $d['wan_iface'] : $d['live_wan']));
+                if ($iface === '') continue;
 
-            $prevAt = (float)$d['inline_at'];
-            if ($prevAt > 0 && $d['inline_rx'] !== null) {
-                $dt = $now - $prevAt;
-                // Too soon to be meaningful, or so long ago the router may have
-                // rebooted in between - either way, take a fresh baseline instead.
-                if ($dt >= 0.4 && $dt <= 120 && $rx >= (int)$d['inline_rx'] && $tx >= (int)$d['inline_tx']) {
-                    $rxBps = (int)round(($rx - (int)$d['inline_rx']) * 8 / $dt);
-                    $txBps = (int)round(($tx - (int)$d['inline_tx']) * 8 / $dt);
-                    $db->prepare("UPDATE status SET rx_bps=?, tx_bps=?, bw_at=? WHERE device_id=?")
-                       ->execute([$rxBps, $txBps, date('Y-m-d H:i:s'), $d['id']]);
-                    $db->prepare("INSERT INTO samples (device_id, ts, rx_bps, tx_bps) VALUES (?,?,?,?)")
-                       ->execute([$d['id'], time(), $rxBps, $txBps]);
+                $rx = $tx = null;
+                foreach (($c->results['if'] ?? []) as $row) {
+                    if (($row['name'] ?? '') === $iface) {
+                        $rx = (int)($row['rx-byte'] ?? 0);
+                        $tx = (int)($row['tx-byte'] ?? 0);
+                    }
                 }
+                if ($rx === null) continue;
+                $now = microtime(true);
+
+                $prevAt = (float)$d['inline_at'];
+                if ($prevAt > 0 && $d['inline_rx'] !== null) {
+                    $dt = $now - $prevAt;
+                    // Too soon to be meaningful, or so long ago the router may have
+                    // rebooted in between - either way, take a fresh baseline.
+                    if ($dt >= 0.4 && $dt <= 120 && $rx >= (int)$d['inline_rx'] && $tx >= (int)$d['inline_tx']) {
+                        $rxBps = (int)round(($rx - (int)$d['inline_rx']) * 8 / $dt);
+                        $txBps = (int)round(($tx - (int)$d['inline_tx']) * 8 / $dt);
+                        mt_db_write($db, "UPDATE status SET rx_bps=?, tx_bps=?, bw_at=? WHERE device_id=?",
+                                    [$rxBps, $txBps, date('Y-m-d H:i:s'), $d['id']]);
+                        $db->prepare("INSERT INTO samples (device_id, ts, rx_bps, tx_bps) VALUES (?,?,?,?)")
+                           ->execute([$d['id'], time(), $rxBps, $txBps]);
+                    }
+                }
+                mt_db_write($db, "UPDATE status SET inline_rx=?, inline_tx=?, inline_at=? WHERE device_id=?",
+                            [$rx, $tx, $now, $d['id']]);
             }
-            $db->prepare("UPDATE status SET inline_rx=?, inline_tx=?, inline_at=? WHERE device_id=?")
-               ->execute([$rx, $tx, $now, $d['id']]);
+            mt_par_close($conns);
         }
 
         // The combined point, from whatever the rows now hold.
