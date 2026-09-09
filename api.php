@@ -282,7 +282,7 @@ switch ($action) {
                    s.identity, s.hotspot_users, s.ppp_users, s.wan_iface AS live_wan,
                    s.rx_bps, s.tx_bps, s.traffic_bytes, s.last_seen, s.last_try,
                    s.net_ping_ms, s.net_ping_target, s.net_ping_err,
-                   s.disco_at, s.disco_err
+                   s.disco_at, s.disco_err, s.wan_note
               FROM devices d LEFT JOIN status s ON s.device_id = d.id
              ORDER BY d.sort_order, d.id")->fetchAll();
 
@@ -350,6 +350,7 @@ switch ($action) {
                 'hotspotUsers'=> $online ? (int)$r['hotspot_users'] : 0,
                 'pppoeUsers'  => $online ? (int)$r['ppp_users'] : 0,
                 'wanIface'    => (string)($r['live_wan'] ?: $r['wan_iface']),
+                'wanNote'     => (string)$r['wan_note'],
                 'socksPort'   => (int)$r['socks_port'],
                 'downloadBps' => $online ? (int)$r['rx_bps'] : 0,
                 'uploadBps'   => $online ? (int)$r['tx_bps'] : 0,

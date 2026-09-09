@@ -226,6 +226,50 @@ function mt_poll_device(PDO $db, array $dev) {
             }
         }
 
+        /**
+         * Guard against measuring the wrong port.
+         *
+         * The interface exists, so the check above is happy, but it is a port
+         * that carries nothing - an unused ether, or the WAN before the ISP was
+         * moved to a different one. Its counters never move, so the dashboard
+         * reports 0 bps and 0 bytes measured for ever, while CPU, memory, uptime
+         * and the user count all keep updating. The router looks dead in exactly
+         * the half of the card that matters, and nothing says why.
+         *
+         * Byte counters are cumulative since boot, so one reading is enough to
+         * tell: a port that has passed a few kilobytes in days, next to one that
+         * has passed hundreds of gigabytes, is not the internet feed.
+         */
+        $wanBytes = null;
+        $busiest = ['name' => '', 'bytes' => 0];
+        foreach ($ifaces as $i) {
+            $bytes = (int)($i['rx-byte'] ?? 0) + (int)($i['tx-byte'] ?? 0);
+            if ($i['name'] === $wan) $wanBytes = $bytes;
+            if (($i['running'] ?? '') !== 'true') continue;
+            if (($i['disabled'] ?? 'false') === 'true') continue;
+            if ($bytes > $busiest['bytes']) $busiest = ['name' => $i['name'], 'bytes' => $bytes];
+        }
+
+        $wanNote = '';
+        if ($wanBytes !== null && $busiest['bytes'] > 10000000 && $wanBytes < $busiest['bytes'] / 100) {
+            // Re-detect rather than jumping to the busiest interface: a bridge and
+            // its member port both count the same packet, and the default route is
+            // what says which one of them is the real feed.
+            $again = mt_detect_wan($ros, $ifaces);
+            $pick  = ($again !== '' && $again !== $wan) ? $again : $busiest['name'];
+            if ($pick !== '' && $pick !== $wan) {
+                $wanNote = 'No traffic was passing on ' . $wan . ', so the speed is now read from ' . $pick . '.';
+                $wan = $pick;
+                $db->prepare("UPDATE devices SET wan_iface=? WHERE id=?")->execute([$wan, $dev['id']]);
+                // The stored counters belong to the old interface. Keeping them
+                // would produce one enormous fake spike on the next poll.
+                $prev['last_rx'] = null;
+                $prev['last_tx'] = null;
+            } else {
+                $wanNote = 'No traffic is passing on ' . $wan . ' - check which port faces the internet.';
+            }
+        }
+
         $rx = $tx = 0;
         foreach ($ifaces as $i) {
             if ($i['name'] === $wan) { $rx = (int)($i['rx-byte'] ?? 0); $tx = (int)($i['tx-byte'] ?? 0); }
@@ -269,6 +313,24 @@ function mt_poll_device(PDO $db, array $dev) {
             catch (Exception $e) {}
         }
 
+        /**
+         * Keep the explanation on screen for a few hours after the interface was
+         * switched. Without this the note is written on the one poll that made
+         * the change and wiped by the next one five seconds later - he would see
+         * the figures come back to life and never learn why they had been zero.
+         */
+        $noteAt = $prev['wan_note_at'] ?? null;
+        if ($wanNote !== '') {
+            $noteAt = $now;
+        } else {
+            $prevNote = (string)($prev['wan_note'] ?? '');
+            if ($prevNote !== '' && $noteAt && (time() - strtotime($noteAt)) < 21600) {
+                $wanNote = $prevNote;          // still recent: leave it up
+            } else {
+                $noteAt = null;
+            }
+        }
+
         $conn = 'Connected (RouterOS API' . (isset($r['version']) && $r['version'] !== '' ? ' ' . explode(' ', $r['version'])[0] : '') . ')';
 
         // Whoever wrote this row's speed most recently owns it. That is the lane when
@@ -282,7 +344,7 @@ function mt_poll_device(PDO $db, array $dev) {
 
         $db->prepare("UPDATE status SET online=1, error='', conn_status=?, ping_ms=?, ping_source=?,
                         cpu=?, ram_pct=?, ram_total_mb=?, ram_free_mb=?, uptime=?, ros_version=?, board=?,
-                        identity=?, hotspot_users=?, ppp_users=?, wan_iface=?, rx_bps=?, tx_bps=?,
+                        identity=?, hotspot_users=?, ppp_users=?, wan_iface=?, wan_note=?, wan_note_at=?, rx_bps=?, tx_bps=?,
                         last_rx=?, last_tx=?, traffic_bytes=traffic_bytes+?, last_at=?, last_seen=?, last_try=?,
                         net_ping_ms=?, net_ping_target=?, net_ping_at=?, net_ping_err=?
                       WHERE device_id=?")
@@ -291,7 +353,7 @@ function mt_poll_device(PDO $db, array $dev) {
                (int)($r['cpu-load'] ?? 0), $ramPct,
                (int)round($totalMem / 1048576), (int)round($freeMem / 1048576),
                mt_uptime_text($r['uptime'] ?? ''), (string)($r['version'] ?? ''), (string)($r['board-name'] ?? ''),
-               $identity, $hotspot, $ppp, $wan, $rxBps, $txBps,
+               $identity, $hotspot, $ppp, $wan, $wanNote, $noteAt, $rxBps, $txBps,
                $rx, $tx, max(0, $moved), $now, $now, $now,
                $netMs, $netTarget, $netAt, $netErr,
                $dev['id'],

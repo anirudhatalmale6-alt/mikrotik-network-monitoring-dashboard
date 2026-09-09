@@ -203,6 +203,11 @@ function mt_schema(PDO $db) {
         'disco_count'     => 'INTEGER',
         'disco_infra'     => 'INTEGER',
         'disco_err'       => "TEXT NOT NULL DEFAULT ''",
+        // Why the interface being measured changed, or that nothing is passing on
+        // it. Shown on the card: a silent 0 bps is what makes a working router
+        // look broken.
+        'wan_note'        => "TEXT NOT NULL DEFAULT ''",
+        'wan_note_at'     => 'TEXT',
     ]);
 
     $defaults = [

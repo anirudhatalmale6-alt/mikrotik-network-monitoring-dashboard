@@ -362,6 +362,10 @@
       +   '<div class="mini"><span class="k">Traffic measured</span><span class="v v-ink" style="font-size:12px" id="tb-' + d.id + '">' + bytes(d.trafficBytes) + '</span></div>'
       + '</div>'
 
+      // A silent 0 bps is what makes a working router look dead. When the port
+      // being measured is not the one carrying the traffic, the card says so.
+      + (d.wanNote ? '<div class="dev-note">' + svg('warn') + '<span>' + esc(d.wanNote) + '</span></div>' : '')
+
       + '<div class="dev-ft"><div class="seen">'
       +   '<span>Last seen: ' + esc(ago(d.lastSeen)) + '</span>'
       +   '<span class="mono">' + (d.wanIface ? 'iface ' + esc(d.wanIface) : '') + '</span>'
@@ -997,7 +1001,8 @@
       id: f.id.value, name: f.name.value.trim(), host: f.host.value.trim(),
       apiPort: f.apiPort.value, username: f.username.value.trim(), password: f.password.value,
       location: f.location.value.trim(), description: f.description.value.trim(),
-      rosVersion: f.rosVersion.value.trim(), wanIface: f.wanIface.value, enabled: f.enabled.checked
+      rosVersion: f.rosVersion.value.trim(), wanIface: f.wanIface.value,
+      socksPort: f.socksPort.value, enabled: f.enabled.checked
     }).then(function (r) {
       if (!r.success) { showResult('#deviceResult', false, r.message); return; }
       close('#deviceModal');
