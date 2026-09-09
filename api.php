@@ -124,15 +124,14 @@ function mt_live_why(PDO $db, $deviceCount) {
     if ($online === 0) return 'No router is reachable yet, so there is nothing to stream.';
     if (mt_setting_now($db, 'php_cli', '') === 'none' || mt_bw_spawn_broken($db)) {
         // Do NOT send anyone to cron here. This host cannot run a background process,
-        // but the page can hold the stream open itself - that is the once-a-second
-        // path on exactly these hosts, and it connects a moment after the page loads.
-        // Telling him to set up a cron job he does not need is worse than saying
-        // nothing: it is work, on the strength of a message that is about to stop
-        // being true.
-        return 'This host will not run a background process, so the page reads the figures itself. '
-             . 'It switches to the once-a-second stream as soon as the connection is established - '
-             . 'if this message is still here after a few seconds, the stream is being blocked and '
-             . 'each reading costs about a second per router instead.';
+        // but the page can read the figures itself, and since every router is now
+        // asked in one go that is fast - it is a different way of working, not a
+        // fault. The old wording ("about a second per router") described the
+        // sequential reader and stopped being true the day that changed; a warning
+        // that is no longer accurate is worse than no warning.
+        return 'This host does not allow a background process, so the page reads the figures '
+             . 'itself - every router in one request, about once a second. That is normal on '
+             . 'this kind of hosting and nothing needs fixing.';
     }
     return 'Connecting the live stream...';
 }
@@ -207,7 +206,12 @@ switch ($action) {
         }
 
         try {
-            mt_bw_run($db, 55, false, function ($ts, $rx, $tx, $rates) use ($emit) {
+            mt_bw_run($db, 55, false, function ($ts, $rx, $tx, $rates, $fresh = 1) use ($emit) {
+                // A round where no router reported is not a reading of zero. Sending
+                // it would drop every figure on the page to 0 and then put it back a
+                // second later, which is exactly what a stream that cannot reach the
+                // routers used to look like.
+                if ($fresh < 1) return true;
                 $devs = [];
                 foreach ($rates as $id => $r) {
                     $devs[] = ['id' => (int)$id, 'downloadBps' => (int)$r['rx'], 'uploadBps' => (int)$r['tx']];

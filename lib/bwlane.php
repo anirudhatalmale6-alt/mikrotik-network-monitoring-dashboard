@@ -162,7 +162,17 @@ function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false, $onTick = null) {
         }
 
         if (!$conns) {
-            mt_set_setting('bw_alive', (string)time());
+            /**
+             * A lane with nothing to stream must NOT claim to be alive.
+             *
+             * bw_alive is what tells the ordinary poll "somebody faster owns the
+             * speed figures, leave them alone". Setting it here meant that when no
+             * router would stream - the API user lacking permission for
+             * monitor-traffic is enough - the poll handed ownership to a lane that
+             * never wrote a figure, and the dashboard sat at 0 bps while the poll
+             * had perfectly good numbers in its hand. Say nothing, and the poll
+             * keeps the job.
+             */
             sleep(1);
             continue;
         }
@@ -215,21 +225,35 @@ function mt_bw_run(PDO $db, $lifetime = 120, $verbose = false, $onTick = null) {
         $now = time();
         if ($now > $lastTotal) {
             $rxT = $txT = 0;
+            $fresh = 0;
             foreach ($rates as $r) {
                 if ($now - $r['at'] > 10) continue;         // stale: leave it out
                 $rxT += $r['rx']; $txT += $r['tx'];
+                $fresh++;
             }
-            $db->prepare("INSERT INTO totals (ts, rx_bps, tx_bps) VALUES (?,?,?)
-                          ON CONFLICT(ts) DO UPDATE SET rx_bps=excluded.rx_bps, tx_bps=excluded.tx_bps")
-               ->execute([$now, $rxT, $txT]);
             $lastTotal = $now;
-            mt_set_setting('bw_alive', (string)$now);
+
+            /**
+             * No fresh reading from anybody is not "the network is idle", it is
+             * "nobody answered". Writing a zero would draw a drop to the floor
+             * that never happened on the wire, and claiming bw_alive would take
+             * the figures away from the ordinary poll, which has good numbers.
+             * So on an empty round this does nothing at all and lets the poll
+             * keep the job.
+             */
+            if ($fresh > 0) {
+                $db->prepare("INSERT INTO totals (ts, rx_bps, tx_bps) VALUES (?,?,?)
+                              ON CONFLICT(ts) DO UPDATE SET rx_bps=excluded.rx_bps, tx_bps=excluded.tx_bps")
+                   ->execute([$now, $rxT, $txT]);
+                mt_set_setting('bw_alive', (string)$now);
+            }
 
             // Let a caller see each tick as it happens. This is what lets the page
             // itself hold the stream open on a host that will not run a background
             // process - same loop, same readings, delivered to a browser instead of
-            // only to the database.
-            if ($onTick !== null && $onTick($now, $rxT, $txT, $rates) === false) break;
+            // only to the database. It is told how many routers actually reported,
+            // so it can stop pretending a silent round is a reading of zero.
+            if ($onTick !== null && $onTick($now, $rxT, $txT, $rates, $fresh) === false) break;
         }
 
         if ($now - $lastTrim >= 60) { mt_bw_trim($db); $lastTrim = $now; }

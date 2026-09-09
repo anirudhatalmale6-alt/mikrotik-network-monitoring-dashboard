@@ -412,12 +412,14 @@
     // the page loads, and during that moment the server correctly reports the slower
     // mode - announcing it straight away meant telling him something was wrong a
     // second before it started working.
-    if (!d.stale && d.devices.length && d.liveWhy && !stream.ok && state.nonStream >= 3) {
+    // "direct" means the page is reading every router itself, once a second, and
+    // since they are all read in one request that is a working state - not
+    // something to put a warning box around. Only say something when the figures
+    // really are no fresher than the poll interval.
+    if (!d.stale && d.devices.length && d.liveWhy && !stream.ok
+        && d.liveMode !== 'direct' && state.nonStream >= 3) {
       out += '<div class="notice notice-info">' + svg('bolt')
-        + '<div><b>' + (d.liveMode === 'direct'
-            ? 'Bandwidth is being read on every refresh.'
-            : 'Live bandwidth is not running.')
-        + '</b> ' + esc(d.liveWhy) + '</div></div>';
+        + '<div><b>Live bandwidth is not running.</b> ' + esc(d.liveWhy) + '</div></div>';
     }
     if (d.defaultPassword && d.isAdmin) {
       out += '<div class="notice notice-info">' + svg('lock')
