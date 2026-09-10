@@ -717,7 +717,7 @@
 
      It is the only thing here that writes to a router, so it checks first,
      shows exactly what it will do and on which address, and can be undone. */
-  var lanAccess = { state: null, busy: false };
+  var lanAccess = { state: null, busy: false, port: 1080 };
 
   function renderAccess() {
     var el = $('#lanAccess');
@@ -751,10 +751,15 @@
       bar += '<div class="lan-access-plan">'
         + '<b>On each router this will run, over the API:</b>'
         + '<ul>'
-        + '<li>switch on its built-in SOCKS proxy on port 1080</li>'
+        + '<li>switch on its built-in SOCKS proxy</li>'
         + '<li>allow <code>' + esc(ip || 'this server') + '</code> and <b>deny everyone else</b></li>'
-        + '<li>add one firewall rule letting that address reach port 1080</li>'
+        + '<li>add one firewall rule letting that address reach that port</li>'
         + '</ul>'
+        + '<div style="margin-top:8px">Port: <input type="number" id="accessPort" min="1" max="65535" '
+        + 'value="' + (lanAccess.port || 1080) + '" style="width:90px;padding:5px 8px;border:1px solid '
+        + 'var(--line);border-radius:8px;font-family:inherit;font-size:12.5px"> '
+        + '<span style="color:var(--muted)">Some providers block 1080 - it is the usual open-proxy '
+        + 'port. If nothing gets through, try a high port such as 18080.</span></div>'
         + 'Everything it adds is labelled <code>mikrotik-dashboard</code>, so "Remove access" '
         + 'takes out exactly those and nothing else. Your own rules are not touched.'
         + '<div style="margin-top:10px"><button type="button" id="accessGo">Yes, set up '
@@ -787,7 +792,9 @@
     if (!ids.length) { lanAccess.busy = false; return; }
     var btn = $('#accessGo') || $('#accessOff');
     if (btn) { btn.disabled = true; btn.textContent = disable ? 'Removing...' : 'Setting up...'; }
-    api('socks_apply', { ids: ids, disable: !!disable, port: 1080 }).then(function (r) {
+    var portBox = $('#accessPort');
+    if (portBox && portBox.value) lanAccess.port = Math.max(1, Math.min(65535, parseInt(portBox.value, 10) || 1080));
+    api('socks_apply', { ids: ids, disable: !!disable, port: lanAccess.port }).then(function (r) {
       lanAccess.busy = false;
       lanAccess.plan = false;
       lanAccess.results = r.results || [];
