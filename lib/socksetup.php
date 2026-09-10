@@ -196,9 +196,26 @@ function mt_socks_enable(RouterOs $ros, $apiPort, $port, $fallbackIp = '') {
             $ros->query('/ip/socks/access/add',
                 ['=action=deny', '=comment=' . MT_SOCKS_TAG . ' (deny everyone else)']);
         }
+
+        /**
+         * RouterOS 6 accepts a comment on a SOCKS access rule and silently does
+         * not store it - seen on his RB2011 running 6.49.20, where a rule added
+         * with a comment came back without one. Everything here is undone by
+         * finding that comment, so on those routers "Remove access" would find
+         * nothing and quietly leave the rules in place. Check whether the label
+         * actually stuck and say so, rather than promising an undo that will not
+         * work.
+         */
+        $tagged = count(mt_socks_mine($ros->query('/ip/socks/access/print')));
+        $note = '';
+        if (!$haveAllow && $tagged === 0) {
+            $note = ' - note: this RouterOS does not keep comments on SOCKS rules, so these two'
+                  . ' have to be removed by hand if you ever want them gone';
+        }
         $steps[] = ['step' => 'Access list',
                     'detail' => ($haveAllow ? 'allow ' . $ip . ' was already there' : 'allow ' . $ip)
-                              . ', ' . ($haveDeny ? 'deny-all was already there' : 'deny everything else')];
+                              . ', ' . ($haveDeny ? 'deny-all was already there' : 'deny everything else')
+                              . $note];
     } catch (Exception $e) {
         return [false, $steps, 'The proxy is on but the access list could not be written ('
                             . $e->getMessage() . '). Switch the proxy off again until this is sorted.'];
