@@ -694,12 +694,13 @@
            + '<td>' + (d.online ? '<span class="pill pill-on"><span class="d"></span>Online</span>'
                                 : '<span class="pill pill-off"><span class="d"></span>' + esc((d.lastSeen || '').slice(0, 16)) + '</span>') + '</td>'
            + '<td>' + (d.proxyUrl
-                ? '<a class="lan-open" href="' + esc(d.proxyUrl) + '" target="_blank" rel="noopener"'
-                  + ' title="Opens through the router, from anywhere">Open</a>'
-                : d.mgmtUrl
-                  ? '<a class="lan-open dim" href="' + esc(d.mgmtUrl) + '" target="_blank" rel="noopener"'
-                    + ' title="This is the device\'s own address. It only opens from a browser already on that network - switch on the router\'s SOCKS port to reach it from anywhere.">Open</a>'
-                  : '') + '</td>'
+                ? '<a class="lan-open' + (d.viaRouter ? '' : ' dim') + '" href="' + esc(d.proxyUrl) + '"'
+                  + ' target="_blank" rel="noopener" title="'
+                  + (d.viaRouter
+                       ? 'Opens the device through the router, from anywhere'
+                       : 'Set up access - this router has no way in yet')
+                  + '">Open</a>'
+                : '') + '</td>'
            + '</tr>';
     }).join('');
 

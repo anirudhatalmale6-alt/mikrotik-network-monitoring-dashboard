@@ -989,12 +989,14 @@ switch ($action) {
                 // Its own management page. Reachable from inside that network today;
                 // the tunnel that makes it work from anywhere is the next step, so
                 // the link is offered without pretending it always opens.
-                // Through the router when its SOCKS proxy is on - that works from
-                // anywhere. Otherwise the device's own address, which only opens
-                // for a browser already inside that network; the UI says which.
-                'mgmtUrl'  => ($r['is_infra'] && $r['ip'] !== '') ? 'http://' . $r['ip'] . '/' : '',
-                'proxyUrl' => ($r['ip'] !== '' && (int)$r['socks_port'] > 0)
-                                ? 'device.php?id=' . (int)$r['id'] : '',
+                // Always through device.php. If the router's SOCKS proxy is on it
+                // opens the device from anywhere; if it is not, device.php shows the
+                // four commands to switch it on. Linking straight to the private
+                // address instead just opened a blank tab and taught him nothing -
+                // he could see his Cisco access points listed and had no way in.
+                'mgmtUrl'  => $r['ip'] !== '' ? 'http://' . $r['ip'] . '/' : '',
+                'proxyUrl' => $r['ip'] !== '' ? 'device.php?id=' . (int)$r['id'] : '',
+                'viaRouter'=> (int)$r['socks_port'] > 0,
             ];
         }
 
