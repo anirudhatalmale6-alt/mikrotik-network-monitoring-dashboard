@@ -725,8 +725,12 @@
     var st = lanAccess.state;
     if (!st) { el.innerHTML = ''; return; }
 
-    var on  = st.routers.filter(function (r) { return r.enabled && r.allowIp; });
-    var off = st.routers.filter(function (r) { return !(r.enabled && r.allowIp); });
+    // "Working" means the proxy is on AND it allows this server - not whether the
+    // dashboard was the one that set it up. He configured one router by hand, and
+    // treating that as unconfigured would nag him about a router that already works.
+    var works = function (r) { return r.enabled && (r.allowsUs || (r.allowIp && r.allowIp === r.ourIp)); };
+    var on  = st.routers.filter(works);
+    var off = st.routers.filter(function (r) { return !works(r); });
     var ip  = (st.routers.find(function (r) { return r.ourIp; }) || {}).ourIp || '';
 
     var bar = '<div class="lan-access-bar">'
@@ -736,7 +740,10 @@
             + (off.length === 1 ? 'it' : 'them') + '.</span>'
             + '<button type="button" id="accessPlan">Set it up for me</button>'
           : '<span class="grow">Access is set up on <b>all ' + on.length + ' router'
-            + (on.length === 1 ? '' : 's') + '</b>. Open works from anywhere.</span>')
+            + (on.length === 1 ? '' : 's') + '</b>. Open works from anywhere.'
+            + (on.some(function (r) { return r.byHand; })
+                ? ' <span style="color:var(--muted)">Some were set up by hand, so "Remove access" '
+                  + 'will leave those rules alone.</span>' : '') + '</span>')
       + (on.length ? '<button type="button" class="ghost" id="accessOff">Remove access</button>' : '')
       + '</div>';
 

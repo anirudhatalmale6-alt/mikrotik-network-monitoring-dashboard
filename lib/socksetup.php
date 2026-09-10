@@ -31,27 +31,37 @@ define('MT_SOCKS_TAG', 'mikrotik-dashboard');
  */
 function mt_socks_seen_ip(RouterOs $ros, $apiPort, $fallback = '') {
     try {
+        // There is no dst-port field on a connection. RouterOS puts the port INTO
+        // the address - dst-address=92.96.47.225:8728 - so querying ?dst-port=
+        // matches nothing at all and quietly returns an empty list, which is not
+        // an error and looks exactly like "the router does not know". Found on his
+        // own RB2011: 669 connections, 0 of them matching that filter.
+        // The proplist keeps the reply small on a router with hundreds of them.
         $rows = $ros->query('/ip/firewall/connection/print',
-                            ['?protocol=tcp', '?dst-port=' . (int)$apiPort]);
+                            ['?protocol=tcp', '=.proplist=src-address,dst-address']);
     } catch (Exception $e) {
         return [$fallback, 'could not read the router\'s connection list: ' . $e->getMessage()];
     }
+    $needle = ':' . (int)$apiPort;
     $seen = [];
     foreach ($rows as $r) {
-        $src = (string)($r['src-address'] ?? '');
-        if ($src === '') continue;
-        $ip = explode(':', $src)[0];
+        $dst = (string)($r['dst-address'] ?? '');
+        if ($dst === '' || substr($dst, -strlen($needle)) !== $needle) continue;
+        $ip = explode(':', (string)($r['src-address'] ?? ''))[0];
         if (filter_var($ip, FILTER_VALIDATE_IP)) $seen[$ip] = true;
     }
     $seen = array_keys($seen);
     if (count($seen) === 1) return [$seen[0], ''];
     if (count($seen) > 1) {
-        // More than one thing is talking to the API port. If one of them is what
-        // this server thinks it is, that is ours; otherwise say so rather than
-        // picking one at random.
+        // Several things are talking to the API port - his router had two while I
+        // was looking at it. If one of them is what this server believes it is,
+        // that is ours. Otherwise REFUSE: guessing here would write an allow rule
+        // for somebody else's address, which is a security decision, not a
+        // convenience one.
         if ($fallback !== '' && in_array($fallback, $seen, true)) return [$fallback, ''];
-        return [$seen[0], 'more than one address is connected to the API port ('
-                        . implode(', ', $seen) . '); using the first'];
+        return ['', 'more than one address is connected to the API port ('
+                  . implode(', ', $seen) . ') and none of them is this server\'s own address, '
+                  . 'so it is not safe to pick one - set the address by hand'];
     }
     return [$fallback, $fallback === '' ? 'the router could not tell us our address' : ''];
 }
@@ -70,7 +80,8 @@ function mt_socks_mine(array $rows) {
  */
 function mt_socks_state(RouterOs $ros, $apiPort, $fallbackIp = '') {
     $state = ['enabled' => false, 'port' => 0, 'allowIp' => '', 'ourIp' => '',
-              'accessRules' => 0, 'firewallRules' => 0, 'note' => '', 'error' => ''];
+              'accessRules' => 0, 'firewallRules' => 0, 'allowsUs' => false,
+              'byHand' => false, 'note' => '', 'error' => ''];
 
     list($ourIp, $note) = mt_socks_seen_ip($ros, $apiPort, $fallbackIp);
     $state['ourIp'] = $ourIp;
@@ -87,13 +98,26 @@ function mt_socks_state(RouterOs $ros, $apiPort, $fallbackIp = '') {
     }
 
     try {
-        $mine = mt_socks_mine($ros->query('/ip/socks/access/print'));
-        $state['accessRules'] = count($mine);
-        foreach ($mine as $r) {
-            if (($r['action'] ?? '') === 'allow' && !empty($r['src-address'])) {
-                $state['allowIp'] = $r['src-address'];
+        $rules = $ros->query('/ip/socks/access/print');
+        // Ours - what "remove access" is allowed to delete.
+        $state['accessRules'] = count(mt_socks_mine($rules));
+        /**
+         * But whether the way in WORKS is a different question from whether we
+         * made it. He set this router up by hand, so his allow rule carries no
+         * comment of ours - and reporting "not set up yet" for a router that is
+         * plainly set up would nag him forever and add a second, duplicate rule
+         * the moment he pressed the button. Any allow rule for this server counts.
+         */
+        foreach ($rules as $r) {
+            if (($r['action'] ?? '') !== 'allow') continue;
+            $src = (string)($r['src-address'] ?? '');
+            if ($src === '') continue;
+            if ($state['allowIp'] === '' || ($ourIp !== '' && $src === $ourIp)) {
+                $state['allowIp'] = $src;
             }
         }
+        $state['allowsUs'] = ($ourIp !== '' && $state['allowIp'] === $ourIp);
+        $state['byHand']   = $state['allowIp'] !== '' && $state['accessRules'] === 0;
     } catch (Exception $e) { /* access list unreadable is not fatal for a report */ }
 
     try {
@@ -156,11 +180,25 @@ function mt_socks_enable(RouterOs $ros, $apiPort, $port, $fallbackIp = '') {
         foreach (mt_socks_mine($ros->query('/ip/socks/access/print')) as $r) {
             if (!empty($r['.id'])) $ros->query('/ip/socks/access/remove', ['=.id=' . $r['.id']]);
         }
-        $ros->query('/ip/socks/access/add',
-            ['=src-address=' . $ip, '=action=allow', '=comment=' . MT_SOCKS_TAG]);
-        $ros->query('/ip/socks/access/add',
-            ['=action=deny', '=comment=' . MT_SOCKS_TAG . ' (deny everyone else)']);
-        $steps[] = ['step' => 'Access list', 'detail' => 'allow ' . $ip . ', deny everything else'];
+        // If an allow rule for this address is already there - because he set it
+        // up by hand - leave it alone rather than adding a duplicate beside it.
+        $existing = $ros->query('/ip/socks/access/print');
+        $haveAllow = false; $haveDeny = false;
+        foreach ($existing as $r) {
+            if (($r['action'] ?? '') === 'allow' && (string)($r['src-address'] ?? '') === $ip) $haveAllow = true;
+            if (($r['action'] ?? '') === 'deny'  && (string)($r['src-address'] ?? '') === '')   $haveDeny  = true;
+        }
+        if (!$haveAllow) {
+            $ros->query('/ip/socks/access/add',
+                ['=src-address=' . $ip, '=action=allow', '=comment=' . MT_SOCKS_TAG]);
+        }
+        if (!$haveDeny) {
+            $ros->query('/ip/socks/access/add',
+                ['=action=deny', '=comment=' . MT_SOCKS_TAG . ' (deny everyone else)']);
+        }
+        $steps[] = ['step' => 'Access list',
+                    'detail' => ($haveAllow ? 'allow ' . $ip . ' was already there' : 'allow ' . $ip)
+                              . ', ' . ($haveDeny ? 'deny-all was already there' : 'deny everything else')];
     } catch (Exception $e) {
         return [false, $steps, 'The proxy is on but the access list could not be written ('
                             . $e->getMessage() . '). Switch the proxy off again until this is sorted.'];
