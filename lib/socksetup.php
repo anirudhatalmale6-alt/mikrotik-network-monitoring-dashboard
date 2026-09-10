@@ -121,9 +121,26 @@ function mt_socks_enable(RouterOs $ros, $apiPort, $port, $fallbackIp = '') {
     $steps[] = ['step' => 'Address to allow', 'detail' => $ip . ($note !== '' ? ' (' . $note . ')' : '')];
 
     // 1. The proxy itself.
+    //
+    // RouterOS 6 has no "version" setting - its SOCKS is version 4, full stop -
+    // and sending one there is an error. Version 5 exists from RouterOS 7. So
+    // ask the router what it is running first, and tell the caller which
+    // protocol it ended up speaking, because the client has to match it.
+    $major = 6;
     try {
-        $ros->query('/ip/socks/set', ['=enabled=yes', '=port=' . $port, '=version=5']);
-        $steps[] = ['step' => 'SOCKS proxy', 'detail' => 'enabled on port ' . $port];
+        $res = $ros->query('/system/resource/print');
+        $ver = (string)($res[0]['version'] ?? '');
+        if (preg_match('/^(\d+)/', $ver, $m)) $major = (int)$m[1];
+    } catch (Exception $e) { /* assume the older, narrower behaviour */ }
+    $socksVersion = $major >= 7 ? 5 : 4;
+
+    try {
+        $args = ['=enabled=yes', '=port=' . $port];
+        if ($socksVersion === 5) $args[] = '=version=5';
+        $ros->query('/ip/socks/set', $args);
+        $steps[] = ['step' => 'SOCKS proxy', 'detail' => 'enabled on port ' . $port
+                                                       . ' (SOCKS' . $socksVersion
+                                                       . ', RouterOS ' . $major . ')'];
     } catch (Exception $e) {
         $msg = $e->getMessage();
         if (stripos($msg, 'permission') !== false) {
@@ -173,7 +190,7 @@ function mt_socks_enable(RouterOs $ros, $apiPort, $port, $fallbackIp = '') {
                                                     . ') - if the proxy answers anyway, nothing is blocking it'];
     }
 
-    return [true, $steps, ''];
+    return [true, $steps, '', $socksVersion];
 }
 
 /** Undo exactly what was added, and nothing else. */

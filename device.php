@@ -9,11 +9,16 @@
  * the router becomes the way in - no VPN, no agent, nothing installed on the
  * device.
  *
- *   /ip/socks set enabled=yes port=1080
- *   /ip/socks/access add src-address=<this server> action=allow
- *   /ip/socks/access add action=deny
- *   /ip/firewall/filter add chain=input protocol=tcp dst-port=1080 \
- *       src-address=<this server> action=accept place-before=0
+ *   /ip socks set enabled=yes port=1080
+ *   /ip socks access add src-address=<this server> action=allow
+ *   /ip socks access add action=deny
+ *   /ip firewall filter add chain=input protocol=tcp dst-port=1080 src-address=<this server> action=accept place-before=0
+ *
+ * Written with SPACES, not slashes. Slash-separated paths are how the API is
+ * addressed and how the RouterOS 7 console accepts them, but a RouterOS 6
+ * console answers "expected command name" - and half his fleet is 6.49. The
+ * space form works on both. Nor is the last line split with a backslash: pasted
+ * into WinBox that becomes its own line and errors on its own.
  *
  * Two URLs:
  *   device.php?id=N        the framed page, with a header saying what you are on
@@ -51,7 +56,8 @@ if ($framed) {
     $sub = '/' . ($parts[1] ?? '');
 }
 
-$st = $db->prepare("SELECT l.*, d.name AS router, d.host AS router_host, d.socks_port
+$st = $db->prepare("SELECT l.*, d.name AS router, d.host AS router_host, d.socks_port,
+                            d.socks_version, d.id AS router_id
                       FROM lan_devices l JOIN devices d ON d.id = l.device_id
                      WHERE l.id = ?");
 $st->execute([$id]);
@@ -101,11 +107,18 @@ if ($socksPort <= 0) {
       . '<p><b>' . htmlspecialchars($dev['ip']) . '</b> is a private address. This server cannot reach it '
       . 'unless the router lets it through.</p>'
       . '<p>RouterOS has that built in. On <b>' . htmlspecialchars($dev['router']) . '</b>:</p>'
-      . '<pre>/ip/socks set enabled=yes port=1080 version=5'
-      . "\n" . '/ip/socks/access add src-address=' . htmlspecialchars($me) . ' action=allow'
-      . "\n" . '/ip/socks/access add action=deny'
-      . "\n" . '/ip/firewall/filter add chain=input protocol=tcp dst-port=1080 \\'
-      . "\n" . '    src-address=' . htmlspecialchars($me) . ' action=accept place-before=0</pre>'
+      . '<pre>/ip socks set enabled=yes port=1080'
+      . "\n" . '/ip socks access add src-address=' . htmlspecialchars($me) . ' action=allow'
+      . "\n" . '/ip socks access add action=deny'
+      . "\n" . '/ip firewall filter add chain=input protocol=tcp dst-port=1080 src-address='
+              . htmlspecialchars($me) . ' action=accept place-before=0</pre>'
+      . '<p>Paste them one line at a time into the WinBox terminal. Two things about the '
+      . 'wording, both learned the hard way: they use <b>spaces, not slashes</b>, because '
+      . 'RouterOS 6 answers <code>expected command name</code> to the slash form; and there '
+      . 'is no <code>version=</code> on the first line, because RouterOS 6 has no such '
+      . 'setting - its SOCKS is version 4 and the dashboard works that out for itself.</p>'
+      . '<p>Or skip all of this: open <b>Connected devices</b> and press '
+      . '<b>Set it up for me</b>, and the dashboard does it on every router at once.</p>'
       . $note
       . '<p>Then set the SOCKS port to 1080 on this router in the dashboard. Only this server is '
       . 'allowed in, and nothing on your network is exposed to the internet.</p>', 409);
@@ -149,27 +162,52 @@ $prefix = ($_SERVER['SCRIPT_NAME'] ?? '/device.php') . '/' . $id;
 $query  = $_SERVER['QUERY_STRING'] ?? '';
 $url    = 'http://' . $ip . $sub . ($query !== '' ? '?' . $query : '');
 
-$ch = curl_init($url);
-curl_setopt_array($ch, [
-    CURLOPT_PROXY          => $dev['router_host'],
-    CURLOPT_PROXYPORT      => $socksPort,
-    // SOCKS5_HOSTNAME so the name is resolved at the router's end, which is the
-    // only place a private name means anything.
-    CURLOPT_PROXYTYPE      => CURLPROXY_SOCKS5_HOSTNAME,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HEADER         => true,
-    CURLOPT_CONNECTTIMEOUT => 8,
-    CURLOPT_TIMEOUT        => 25,
-    CURLOPT_FOLLOWLOCATION => false,
-    CURLOPT_SSL_VERIFYPEER => false,      // these devices ship self-signed certs
-    CURLOPT_SSL_VERIFYHOST => false,
-    CURLOPT_USERAGENT      => $_SERVER['HTTP_USER_AGENT'] ?? 'Mozilla/5.0',
-]);
-$raw = curl_exec($ch);
+/**
+ * Which SOCKS to speak.
+ *
+ * RouterOS 6 only does version 4; version 5 arrived with RouterOS 7. A client
+ * using the wrong one simply fails to connect, and the error looks exactly like
+ * an unreachable device. The version is remembered per router when the
+ * dashboard sets the proxy up, and where it is not known yet both are tried and
+ * the one that worked is saved.
+ */
+$order = ((int)$dev['socks_version'] === 4)
+    ? [CURLPROXY_SOCKS4]
+    : (((int)$dev['socks_version'] === 5) ? [CURLPROXY_SOCKS5_HOSTNAME]
+                                          : [CURLPROXY_SOCKS5_HOSTNAME, CURLPROXY_SOCKS4]);
+
+$raw = false; $err = ''; $ch = null; $usedType = null;
+foreach ($order as $type) {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_PROXY          => $dev['router_host'],
+        CURLOPT_PROXYPORT      => $socksPort,
+        CURLOPT_PROXYTYPE      => $type,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER         => true,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_TIMEOUT        => 25,
+        CURLOPT_FOLLOWLOCATION => false,
+        CURLOPT_SSL_VERIFYPEER => false,      // these devices ship self-signed certs
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_USERAGENT      => $_SERVER['HTTP_USER_AGENT'] ?? 'Mozilla/5.0',
+    ]);
+    $raw = curl_exec($ch);
+    if ($raw !== false) { $usedType = $type; break; }
+    $err = curl_error($ch);
+    if (count($order) > 1) { curl_close($ch); $ch = null; }
+}
+
+// Remember what worked, so the next click goes straight there.
+if ($raw !== false && $usedType !== null && (int)$dev['socks_version'] === 0) {
+    try {
+        mt_db_write($db, "UPDATE devices SET socks_version=? WHERE id=?",
+                    [$usedType === CURLPROXY_SOCKS4 ? 4 : 5, (int)$dev['router_id']]);
+    } catch (Exception $e) { /* it will be worked out again next time */ }
+}
 
 if ($raw === false) {
-    $err = curl_error($ch);
-    curl_close($ch);
+    if (is_resource($ch) || $ch instanceof CurlHandle) curl_close($ch);
     mt_dev_page('Cannot reach it',
         '<h1>Could not open ' . htmlspecialchars($ip) . '</h1>'
       . '<p><code>' . htmlspecialchars($err) . '</code></p>'

@@ -177,6 +177,11 @@ function mt_schema(PDO $db) {
     // device.php then explains how rather than failing silently.
     mt_add_columns($db, 'devices', [
         'socks_port' => 'INTEGER NOT NULL DEFAULT 0',
+        // 4 or 5. RouterOS 6's SOCKS is version 4 only and has no "version"
+        // setting at all; version 5 arrived with RouterOS 7. A client that
+        // speaks the wrong one just fails to connect, so which it is has to be
+        // remembered rather than assumed. 0 = not known yet, try both.
+        'socks_version' => 'INTEGER NOT NULL DEFAULT 0',
     ]);
 
     mt_add_columns($db, 'status', [

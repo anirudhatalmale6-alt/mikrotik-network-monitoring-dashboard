@@ -1119,15 +1119,16 @@ switch ($action) {
                     list($ok, $steps, $err) = mt_socks_disable($ros);
                     if ($ok) mt_db_write($db, "UPDATE devices SET socks_port=0 WHERE id=?", [$id]);
                 } else {
-                    list($ok, $steps, $err) = mt_socks_enable($ros, $d['api_port'], $port,
-                                                              $_SERVER['SERVER_ADDR'] ?? '');
+                    list($ok, $steps, $err, $sv) = array_pad(
+                        mt_socks_enable($ros, $d['api_port'], $port, $_SERVER['SERVER_ADDR'] ?? ''), 4, 0);
                     if ($ok) {
                         // The router is already changed at this point. If the note
                         // cannot be saved that is not a failed setup - say so and
                         // let the next check pick it up, rather than reporting a
                         // success as an error and inviting him to run it again.
                         try {
-                            mt_db_write($db, "UPDATE devices SET socks_port=? WHERE id=?", [$port, $id], 12);
+                            mt_db_write($db, "UPDATE devices SET socks_port=?, socks_version=? WHERE id=?",
+                                        [$port, (int)$sv, $id], 12);
                         } catch (Exception $e2) {
                             $steps[] = ['step' => 'Note',
                                         'detail' => 'the router is set up; the dashboard could not save that '
