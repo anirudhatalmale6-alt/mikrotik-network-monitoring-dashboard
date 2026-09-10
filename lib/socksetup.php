@@ -1,0 +1,198 @@
+<?php
+/**
+ * Switching on the router's own way in, from the dashboard.
+ *
+ * Reaching a device on a private address means going through the router, and
+ * RouterOS has a SOCKS proxy built in for exactly that. Setting it up by hand is
+ * four commands - fine for one router, not for ten, and he has ten.
+ *
+ * This does it over the API instead. It is the ONLY part of this dashboard that
+ * writes to a router, so it is built to be undoable and to prove what it did:
+ *
+ *   - every object it creates carries the comment MT_SOCKS_TAG, so "remove
+ *     access" can find exactly what was added and nothing else
+ *   - it never edits or deletes anything it did not create
+ *   - it asks the ROUTER which address it sees this server coming from, rather
+ *     than trusting what the web server thinks its own address is. Behind NAT or
+ *     a proxy those are different, and an allow rule for the wrong address locks
+ *     the dashboard out while looking like it worked.
+ */
+
+require_once __DIR__ . '/routeros.php';
+
+define('MT_SOCKS_TAG', 'mikrotik-dashboard');
+
+/**
+ * The address this server appears to come from, as the router sees it.
+ *
+ * Connection tracking is holding our own API session right now, so the router
+ * can simply be asked. $fallback is used when tracking is off or the API user
+ * may not read it.
+ */
+function mt_socks_seen_ip(RouterOs $ros, $apiPort, $fallback = '') {
+    try {
+        $rows = $ros->query('/ip/firewall/connection/print',
+                            ['?protocol=tcp', '?dst-port=' . (int)$apiPort]);
+    } catch (Exception $e) {
+        return [$fallback, 'could not read the router\'s connection list: ' . $e->getMessage()];
+    }
+    $seen = [];
+    foreach ($rows as $r) {
+        $src = (string)($r['src-address'] ?? '');
+        if ($src === '') continue;
+        $ip = explode(':', $src)[0];
+        if (filter_var($ip, FILTER_VALIDATE_IP)) $seen[$ip] = true;
+    }
+    $seen = array_keys($seen);
+    if (count($seen) === 1) return [$seen[0], ''];
+    if (count($seen) > 1) {
+        // More than one thing is talking to the API port. If one of them is what
+        // this server thinks it is, that is ours; otherwise say so rather than
+        // picking one at random.
+        if ($fallback !== '' && in_array($fallback, $seen, true)) return [$fallback, ''];
+        return [$seen[0], 'more than one address is connected to the API port ('
+                        . implode(', ', $seen) . '); using the first'];
+    }
+    return [$fallback, $fallback === '' ? 'the router could not tell us our address' : ''];
+}
+
+/** Rows this dashboard created, identified by the comment it stamps on them. */
+function mt_socks_mine(array $rows) {
+    $out = [];
+    foreach ($rows as $r) {
+        if (isset($r['comment']) && strpos($r['comment'], MT_SOCKS_TAG) !== false) $out[] = $r;
+    }
+    return $out;
+}
+
+/**
+ * What is set up on this router right now. Read only - safe to call any time.
+ */
+function mt_socks_state(RouterOs $ros, $apiPort, $fallbackIp = '') {
+    $state = ['enabled' => false, 'port' => 0, 'allowIp' => '', 'ourIp' => '',
+              'accessRules' => 0, 'firewallRules' => 0, 'note' => '', 'error' => ''];
+
+    list($ourIp, $note) = mt_socks_seen_ip($ros, $apiPort, $fallbackIp);
+    $state['ourIp'] = $ourIp;
+    $state['note']  = $note;
+
+    try {
+        $s = $ros->query('/ip/socks/print');
+        $row = $s[0] ?? [];
+        $state['enabled'] = (($row['enabled'] ?? 'false') === 'true');
+        $state['port']    = (int)($row['port'] ?? 0);
+    } catch (Exception $e) {
+        $state['error'] = $e->getMessage();
+        return $state;
+    }
+
+    try {
+        $mine = mt_socks_mine($ros->query('/ip/socks/access/print'));
+        $state['accessRules'] = count($mine);
+        foreach ($mine as $r) {
+            if (($r['action'] ?? '') === 'allow' && !empty($r['src-address'])) {
+                $state['allowIp'] = $r['src-address'];
+            }
+        }
+    } catch (Exception $e) { /* access list unreadable is not fatal for a report */ }
+
+    try {
+        $state['firewallRules'] = count(mt_socks_mine($ros->query('/ip/firewall/filter/print')));
+    } catch (Exception $e) { /* same */ }
+
+    return $state;
+}
+
+/**
+ * Switch it on. Returns [ok, steps[], error].
+ *
+ * Every step is reported with what was actually run, so the result is a record
+ * of what changed on his router rather than a reassuring tick.
+ */
+function mt_socks_enable(RouterOs $ros, $apiPort, $port, $fallbackIp = '') {
+    $steps = [];
+    $port  = max(1, min(65535, (int)$port));
+
+    list($ip, $note) = mt_socks_seen_ip($ros, $apiPort, $fallbackIp);
+    if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+        return [false, $steps, 'Could not work out which address this server reaches the router from, '
+                            . 'so there is nothing safe to allow. ' . $note];
+    }
+    $steps[] = ['step' => 'Address to allow', 'detail' => $ip . ($note !== '' ? ' (' . $note . ')' : '')];
+
+    // 1. The proxy itself.
+    try {
+        $ros->query('/ip/socks/set', ['=enabled=yes', '=port=' . $port, '=version=5']);
+        $steps[] = ['step' => 'SOCKS proxy', 'detail' => 'enabled on port ' . $port];
+    } catch (Exception $e) {
+        $msg = $e->getMessage();
+        if (stripos($msg, 'permission') !== false) {
+            $msg = 'the API user does not have write permission on this router';
+        }
+        return [false, $steps, 'Could not enable the proxy: ' . $msg];
+    }
+
+    // 2. The access list: only this server, everything else refused. Ours are
+    //    cleared and rewritten so running this twice cannot stack up duplicates,
+    //    and rules we did not create are left exactly as they are.
+    try {
+        foreach (mt_socks_mine($ros->query('/ip/socks/access/print')) as $r) {
+            if (!empty($r['.id'])) $ros->query('/ip/socks/access/remove', ['=.id=' . $r['.id']]);
+        }
+        $ros->query('/ip/socks/access/add',
+            ['=src-address=' . $ip, '=action=allow', '=comment=' . MT_SOCKS_TAG]);
+        $ros->query('/ip/socks/access/add',
+            ['=action=deny', '=comment=' . MT_SOCKS_TAG . ' (deny everyone else)']);
+        $steps[] = ['step' => 'Access list', 'detail' => 'allow ' . $ip . ', deny everything else'];
+    } catch (Exception $e) {
+        return [false, $steps, 'The proxy is on but the access list could not be written ('
+                            . $e->getMessage() . '). Switch the proxy off again until this is sorted.'];
+    }
+
+    // 3. Let this server reach that port. Placed above the existing input rules so
+    //    a drop rule further down cannot swallow it - but nothing existing is
+    //    touched, only inserted before.
+    try {
+        foreach (mt_socks_mine($ros->query('/ip/firewall/filter/print')) as $r) {
+            if (!empty($r['.id'])) $ros->query('/ip/firewall/filter/remove', ['=.id=' . $r['.id']]);
+        }
+        $args = ['=chain=input', '=protocol=tcp', '=dst-port=' . $port, '=src-address=' . $ip,
+                 '=action=accept', '=comment=' . MT_SOCKS_TAG];
+        $firstInput = '';
+        foreach ($ros->query('/ip/firewall/filter/print') as $r) {
+            if (($r['chain'] ?? '') === 'input' && !empty($r['.id'])) { $firstInput = $r['.id']; break; }
+        }
+        if ($firstInput !== '') $args[] = '=place-before=' . $firstInput;
+        $ros->query('/ip/firewall/filter/add', $args);
+        $steps[] = ['step' => 'Firewall', 'detail' => 'accept tcp/' . $port . ' from ' . $ip
+                                                    . ($firstInput !== '' ? ', placed first in the input chain' : '')];
+    } catch (Exception $e) {
+        // Not fatal: plenty of routers have no filtering on input at all, and the
+        // proxy is already reachable on those.
+        $steps[] = ['step' => 'Firewall', 'detail' => 'could not add the rule (' . $e->getMessage()
+                                                    . ') - if the proxy answers anyway, nothing is blocking it'];
+    }
+
+    return [true, $steps, ''];
+}
+
+/** Undo exactly what was added, and nothing else. */
+function mt_socks_disable(RouterOs $ros) {
+    $steps = [];
+    $removed = 0;
+    try {
+        foreach (mt_socks_mine($ros->query('/ip/socks/access/print')) as $r) {
+            if (!empty($r['.id'])) { $ros->query('/ip/socks/access/remove', ['=.id=' . $r['.id']]); $removed++; }
+        }
+        foreach (mt_socks_mine($ros->query('/ip/firewall/filter/print')) as $r) {
+            if (!empty($r['.id'])) { $ros->query('/ip/firewall/filter/remove', ['=.id=' . $r['.id']]); $removed++; }
+        }
+        $steps[] = ['step' => 'Rules removed', 'detail' => $removed . ' rule' . ($removed === 1 ? '' : 's')
+                                                        . ' that this dashboard had added'];
+        $ros->query('/ip/socks/set', ['=enabled=no']);
+        $steps[] = ['step' => 'SOCKS proxy', 'detail' => 'switched off'];
+    } catch (Exception $e) {
+        return [false, $steps, $e->getMessage()];
+    }
+    return [true, $steps, ''];
+}

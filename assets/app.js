@@ -710,6 +710,85 @@
          + '</tr></thead><tbody>' + body + '</tbody></table>';
   }
 
+  /* --------------------------------------------- setting up the way in
+     He asked for this in one line: "it is impossible to add all router this
+     commands". Four commands per router is fine for one and unreasonable for
+     ten, and the dashboard already holds an API login for every one of them.
+
+     It is the only thing here that writes to a router, so it checks first,
+     shows exactly what it will do and on which address, and can be undone. */
+  var lanAccess = { state: null, busy: false };
+
+  function renderAccess() {
+    var el = $('#lanAccess');
+    if (!el) return;
+    var st = lanAccess.state;
+    if (!st) { el.innerHTML = ''; return; }
+
+    var on  = st.routers.filter(function (r) { return r.enabled && r.allowIp; });
+    var off = st.routers.filter(function (r) { return !(r.enabled && r.allowIp); });
+    var ip  = (st.routers.find(function (r) { return r.ourIp; }) || {}).ourIp || '';
+
+    var bar = '<div class="lan-access-bar">'
+      + (off.length
+          ? '<span class="grow"><b>' + off.length + ' router' + (off.length === 1 ? '' : 's')
+            + '</b> cannot be reached into yet, so Open will not work for anything behind '
+            + (off.length === 1 ? 'it' : 'them') + '.</span>'
+            + '<button type="button" id="accessPlan">Set it up for me</button>'
+          : '<span class="grow">Access is set up on <b>all ' + on.length + ' router'
+            + (on.length === 1 ? '' : 's') + '</b>. Open works from anywhere.</span>')
+      + (on.length ? '<button type="button" class="ghost" id="accessOff">Remove access</button>' : '')
+      + '</div>';
+
+    if (lanAccess.plan) {
+      bar += '<div class="lan-access-plan">'
+        + '<b>On each router this will run, over the API:</b>'
+        + '<ul>'
+        + '<li>switch on its built-in SOCKS proxy on port 1080</li>'
+        + '<li>allow <code>' + esc(ip || 'this server') + '</code> and <b>deny everyone else</b></li>'
+        + '<li>add one firewall rule letting that address reach port 1080</li>'
+        + '</ul>'
+        + 'Everything it adds is labelled <code>mikrotik-dashboard</code>, so "Remove access" '
+        + 'takes out exactly those and nothing else. Your own rules are not touched.'
+        + '<div style="margin-top:10px"><button type="button" id="accessGo">Yes, set up '
+        + off.length + ' router' + (off.length === 1 ? '' : 's') + '</button> '
+        + '<button type="button" class="ghost" id="accessCancel">Cancel</button></div>'
+        + '</div>';
+    }
+    if (lanAccess.results) {
+      bar += '<div class="lan-access-res">' + lanAccess.results.map(function (r) {
+        return '<div class="' + (r.ok ? 'ok' : 'bad') + '"><b>' + esc(r.name) + '</b> - '
+             + (r.ok ? r.steps.map(function (s) { return esc(s.detail); }).join(' &middot; ')
+                     : esc(r.error || 'failed')) + '</div>';
+      }).join('') + '</div>';
+    }
+    el.innerHTML = bar;
+  }
+
+  function checkAccess() {
+    return api('socks_check', null, 'GET').then(function (r) {
+      if (r.success) { lanAccess.state = r; renderAccess(); }
+    });
+  }
+
+  function applyAccess(disable) {
+    if (lanAccess.busy) return;
+    lanAccess.busy = true;
+    var ids = (lanAccess.state.routers || [])
+      .filter(function (r) { return disable ? (r.enabled && r.allowIp) : !(r.enabled && r.allowIp); })
+      .map(function (r) { return r.id; });
+    if (!ids.length) { lanAccess.busy = false; return; }
+    var btn = $('#accessGo') || $('#accessOff');
+    if (btn) { btn.disabled = true; btn.textContent = disable ? 'Removing...' : 'Setting up...'; }
+    api('socks_apply', { ids: ids, disable: !!disable, port: 1080 }).then(function (r) {
+      lanAccess.busy = false;
+      lanAccess.plan = false;
+      lanAccess.results = r.results || [];
+      toast(r.message || 'Done', (r.done === r.total) ? 'ok' : 'bad');
+      checkAccess().then(loadLan);
+    });
+  }
+
   function loadLan() {
     var q = $('#lanSearch').value.trim();
     var infra = $('#lanInfra').checked ? '1' : '';
@@ -741,6 +820,9 @@
   }
 
   function openLan() {
+    lanAccess.plan = false; lanAccess.results = null;
+    $('#lanAccess').innerHTML = '';
+    checkAccess();
     $('#lanSub').textContent = 'Reading...';
     $('#lanBody').innerHTML = '<div class="lan-empty">Loading...</div>';
     $('#lanScans').innerHTML = '';
@@ -775,6 +857,11 @@
 
     var b = e.target.closest('button');
     if (!b) return;
+
+    if (b.id === 'accessPlan')   { lanAccess.plan = true;  lanAccess.results = null; renderAccess(); return; }
+    if (b.id === 'accessCancel') { lanAccess.plan = false; renderAccess(); return; }
+    if (b.id === 'accessGo')     { applyAccess(false); return; }
+    if (b.id === 'accessOff')    { applyAccess(true);  return; }
 
     var scanId = b.getAttribute('data-scan');
     if (scanId) {

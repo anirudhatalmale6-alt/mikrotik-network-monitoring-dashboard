@@ -407,3 +407,34 @@ table.lan tr.off td { color: var(--muted-2); }
   background: var(--amber-l); border: 1px solid #fde68a; color: #92400e;
 }
 .dev-note svg { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 1px; }
+
+
+/* setting up the routers' own way in, from the dashboard */
+.lan-access { margin-bottom: 12px; }
+.lan-access-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 11px; font-size: 12.5px;
+  background: var(--indigo-l); border: 1px solid #c7d2fe; color: var(--ink-2);
+}
+.lan-access-bar b { color: var(--ink); }
+.lan-access-bar .grow { flex: 1 1 auto; }
+.lan-access-bar button {
+  border: 1px solid var(--indigo); background: var(--indigo); color: #fff;
+  border-radius: 9px; padding: 6px 12px; font-size: 12px; font-family: inherit;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.lan-access-bar button.ghost { background: #fff; color: var(--ink-2); border-color: var(--line); }
+.lan-access-bar button:disabled { opacity: .6; cursor: default; }
+.lan-access-plan {
+  margin-top: 9px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px;
+  background: #fff; font-size: 12.5px; line-height: 1.6;
+}
+.lan-access-plan ul { margin: 7px 0 0 18px; }
+.lan-access-plan code {
+  background: #f1f5f9; border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 5px; font-size: 11.5px;
+}
+.lan-access-res { margin-top: 9px; font-size: 12.5px; }
+.lan-access-res div { padding: 3px 0; }
+.lan-access-res .ok  { color: var(--emerald); }
+.lan-access-res .bad { color: var(--rose); }

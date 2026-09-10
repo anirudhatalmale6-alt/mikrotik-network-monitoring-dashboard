@@ -1042,6 +1042,114 @@ switch ($action) {
                 'message' => 'Scanning ' . $name . ' - the list updates in a few seconds.']);
         break;
 
+    /* ------------------------------------------------------- router access
+       Switching on the router's own SOCKS proxy from here, instead of asking
+       him to paste four commands into ten routers by hand.
+
+       This is the only place in the dashboard that writes to a router, so:
+       'socks_check' only reads and reports, and the writing actions are
+       separate, explicit, and reversible. */
+    case 'socks_check':
+        mt_require_admin();
+        $ids = array_map('intval', (array)($_GET['ids'] ?? []));
+        if (!$ids) {
+            $ids = array_map('intval', $db->query("SELECT id FROM devices WHERE enabled=1
+                                                    ORDER BY sort_order, id")->fetchAll(PDO::FETCH_COLUMN));
+        }
+        require_once __DIR__ . '/lib/socksetup.php';
+        $out = [];
+        foreach ($ids as $id) {
+            $st = $db->prepare("SELECT * FROM devices WHERE id=?");
+            $st->execute([$id]);
+            $d = $st->fetch();
+            if (!$d) continue;
+            $ros = new RouterOs(max(4, (int)mt_setting('api_timeout', 6)));
+            $row = ['id' => (int)$d['id'], 'name' => $d['name'], 'socksPort' => (int)$d['socks_port']];
+            try {
+                $ros->connect($d['host'], $d['api_port'], $d['username'], $d['password']);
+                $row += mt_socks_state($ros, $d['api_port'], $_SERVER['SERVER_ADDR'] ?? '');
+                $ros->close();
+                /**
+                 * The router is the truth; socks_port is only this dashboard's
+                 * note of it. They came apart for real: a setup succeeded on the
+                 * router and the row could not be written because the database
+                 * was busy, so the dashboard kept offering to set up a router
+                 * that was already done. Reading the two together and correcting
+                 * the note costs nothing and closes that hole.
+                 */
+                if (!empty($row['enabled']) && !empty($row['allowIp']) && (int)$row['port'] > 0
+                    && (int)$row['port'] !== (int)$d['socks_port']) {
+                    try {
+                        mt_db_write($db, "UPDATE devices SET socks_port=? WHERE id=?",
+                                    [(int)$row['port'], $id], 12);
+                        $row['socksPort'] = (int)$row['port'];
+                        $row['synced'] = true;
+                    } catch (Exception $e2) { /* it will be corrected next time */ }
+                }
+            } catch (Exception $e) {
+                $ros->close();
+                $row['error'] = $e->getMessage();
+            }
+            $out[] = $row;
+        }
+        mt_out(['success' => true, 'routers' => $out]);
+        break;
+
+    case 'socks_apply':
+        mt_guard();
+        $b    = mt_body();
+        $ids  = array_map('intval', (array)($b['ids'] ?? []));
+        $off  = !empty($b['disable']);
+        $port = max(1, min(65535, (int)($b['port'] ?? 1080)));
+        if (!$ids) mt_out(['success' => false, 'message' => 'No routers selected.'], 400);
+
+        require_once __DIR__ . '/lib/socksetup.php';
+        $results = [];
+        foreach ($ids as $id) {
+            $st = $db->prepare("SELECT * FROM devices WHERE id=?");
+            $st->execute([$id]);
+            $d = $st->fetch();
+            if (!$d) continue;
+
+            $ros = new RouterOs(max(6, (int)mt_setting('api_timeout', 6) + 4));
+            $r = ['id' => (int)$d['id'], 'name' => $d['name'], 'ok' => false, 'steps' => [], 'error' => ''];
+            try {
+                $ros->connect($d['host'], $d['api_port'], $d['username'], $d['password']);
+                if ($off) {
+                    list($ok, $steps, $err) = mt_socks_disable($ros);
+                    if ($ok) mt_db_write($db, "UPDATE devices SET socks_port=0 WHERE id=?", [$id]);
+                } else {
+                    list($ok, $steps, $err) = mt_socks_enable($ros, $d['api_port'], $port,
+                                                              $_SERVER['SERVER_ADDR'] ?? '');
+                    if ($ok) {
+                        // The router is already changed at this point. If the note
+                        // cannot be saved that is not a failed setup - say so and
+                        // let the next check pick it up, rather than reporting a
+                        // success as an error and inviting him to run it again.
+                        try {
+                            mt_db_write($db, "UPDATE devices SET socks_port=? WHERE id=?", [$port, $id], 12);
+                        } catch (Exception $e2) {
+                            $steps[] = ['step' => 'Note',
+                                        'detail' => 'the router is set up; the dashboard could not save that '
+                                                  . 'just now and will pick it up on the next check'];
+                        }
+                    }
+                }
+                $ros->close();
+                $r['ok'] = $ok; $r['steps'] = $steps; $r['error'] = $err;
+            } catch (Exception $e) {
+                $ros->close();
+                $r['error'] = $e->getMessage();
+            }
+            $results[] = $r;
+        }
+        $done = 0;
+        foreach ($results as $r) if ($r['ok']) $done++;
+        mt_out(['success' => true, 'results' => $results, 'done' => $done, 'total' => count($results),
+                'message' => ($off ? 'Access removed on ' : 'Access set up on ') . $done
+                             . ' of ' . count($results) . ' router' . (count($results) === 1 ? '' : 's')]);
+        break;
+
     case 'device_interfaces':
         mt_require_admin();
         $b = mt_body();

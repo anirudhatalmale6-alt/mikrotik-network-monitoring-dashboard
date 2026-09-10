@@ -302,6 +302,7 @@ function mt_asset($rel) {
         <input type="search" id="lanSearch" placeholder="Search IP, MAC, name, vendor or model">
         <label class="lan-check"><input type="checkbox" id="lanInfra"> Network devices only</label>
       </div>
+      <div id="lanAccess" class="lan-access"></div>
       <div id="lanScans" class="lan-scans"></div>
       <div id="lanBody" class="lan-wrap"></div>
     </div>
