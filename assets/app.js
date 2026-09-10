@@ -400,11 +400,34 @@
 
   function renderNotices(d) {
     var out = '';
-    if (d.stale) {
+    /**
+     * Stale data is only worth a warning if it is going to STAY stale.
+     *
+     * On hosting that will not run a background process - his - the routers are
+     * only read while somebody has this page open. Come back in the morning and
+     * the last reading is honestly hours old, and a fresh poll is already running
+     * because opening the page started one. Shouting then was wrong twice over:
+     * it called normal behaviour a fault, and it told him to go and check a
+     * systemd service he never installed, on hosting that has no systemd.
+     *
+     * So: say nothing while a poll is under way, and when it really has stopped,
+     * say the thing that is true for THIS installation.
+     */
+    var polling = d.pollStartedAgo !== undefined && d.pollStartedAgo <= 30;
+    if (d.stale && !polling) {
       out += '<div class="notice notice-warn">' + svg('warn')
-        + '<div><b>The routers have not been polled recently.</b> Last poll: ' + esc(ago(d.lastPoll))
-        + '. The figures below are the last readings, not live. If you installed the background poller, check it is running'
-        + ' (<span class="mono">systemctl status mikrotik-monitor</span>).</div></div>';
+        + '<div><b>The routers have not been read recently.</b> Last reading: ' + esc(ago(d.lastPoll))
+        + '. '
+        + (d.pollInPage
+            ? 'This hosting cannot run anything in the background, so the routers are only read '
+              + 'while this page is open. Leave it open and the figures come back within a few seconds.'
+            : 'The background poller does not seem to be running - check it with '
+              + '<span class="mono">systemctl status mikrotik-monitor</span>.')
+        + '</div></div>';
+    } else if (d.stale && polling) {
+      out += '<div class="notice notice-info">' + svg('refresh')
+        + '<div><b>Reading the routers now.</b> The figures below are from '
+        + esc(ago(d.lastPoll)) + ' and are being refreshed.</div></div>';
     }
     // Not an error - it is the normal state of a fresh install, and saying so beats
     // leaving someone staring at empty tiles wondering what went wrong.

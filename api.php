@@ -403,6 +403,17 @@ switch ($action) {
             // correct installation look broken.
             'stale'      => count($devices) > 0
                             && (!$newest || (time() - strtotime($newest)) > max(60, (int)mt_setting('poll_seconds', 10) * 4)),
+            // How long ago a poll was STARTED. On a host that will not run a
+            // background process the routers are only read while somebody has the
+            // page open, so after a quiet night the last reading is genuinely old -
+            // and a poll is already under way to replace it. Without this the page
+            // could only see "old data" and shouted about it every single time he
+            // opened the dashboard.
+            'pollStartedAgo' => max(0, time() - (int)mt_setting_now($db, 'last_poll_started', 0)),
+            // Whether anything polls when nobody is looking. False on his hosting,
+            // and that is not a fault to be fixed - it decides what the page should
+            // say, and stops it sending him to check a service he never installed.
+            'pollInPage' => !(mt_bw_alive($db) || mt_php_cli($db) !== false),
             'isAdmin'    => mt_is_admin(),
             'adminUser'  => mt_admin_name(),
             'csrf'       => mt_is_admin() ? mt_csrf() : '',
