@@ -247,8 +247,9 @@
              { id: 'tv-total', list: 'all' })
       // Everything found behind the routers. Only an admin can open the list, so
       // there is no point offering the click to a signed-out visitor.
-      + tile('t-violet', 'Connected devices', (s.totalLanDevices || 0).toLocaleString(), 'nodes',
-             '<b>' + (s.totalInfraDevices || 0) + '</b> network devices'
+      // He asked "what is this" about this tile, so the tile itself now says.
+      + tile('t-violet', 'Devices behind your routers', (s.totalLanDevices || 0).toLocaleString(), 'nodes',
+             'Of these, <b>' + (s.totalInfraDevices || 0) + '</b> are network equipment'
              + (state.isAdmin ? ' &middot; <b>see list</b>' : ' &middot; sign in to see the list'),
              { id: 'tv-lan', list: state.isAdmin ? 'lan' : '' });
   }
@@ -717,13 +718,17 @@
         return;
       }
       $('#lanSub').textContent = r.devices.length + ' device' + (r.devices.length === 1 ? '' : 's')
-        + (q || infra ? ' matching' : ' seen')
-        + ' - scanned every ' + Math.round(r.every / 60) + ' min';
+        + (q || infra ? ' matching your search' : ' in the list')
+        + ' - each router is scanned every ' + Math.round(r.every / 60) + ' min';
 
       $('#lanScans').innerHTML = (r.scans || []).map(function (s) {
-        var when = s.at ? s.at.slice(11, 16) : 'not yet';
+        // "Scan now" clears the timestamp so the poller picks the router up on its
+        // next turn. Showing that as "not yet" next to a count from the previous
+        // scan reads as "this has never run" when it has - it is queued.
+        var when = s.at ? ('scanned ' + s.at.slice(11, 16))
+                        : (s.count > 0 ? 'scanning now' : 'not scanned yet');
         return '<span class="lan-scan"><b>' + esc(s.name) + '</b> '
-             + s.count + ' devices, ' + s.infra + ' network'
+             + (s.count > 0 ? s.count + ' found, ' + s.infra + ' network equipment' : 'no devices yet')
              + ' <span style="color:var(--muted-2)">' + esc(when) + '</span>'
              + (s.error ? ' <span class="err">' + esc(s.error) + '</span>' : '')
              + ' <button type="button" data-scan="' + s.id + '">Scan now</button></span>';
