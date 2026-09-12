@@ -116,7 +116,9 @@ if ($socksPort <= 0) {
       . 'wording, both learned the hard way: they use <b>spaces, not slashes</b>, because '
       . 'RouterOS 6 answers <code>expected command name</code> to the slash form; and there '
       . 'is no <code>version=</code> on the first line, because RouterOS 6 has no such '
-      . 'setting - its SOCKS is version 4 and the dashboard works that out for itself.</p>'
+      . 'setting. On RouterOS 7 you can add <code>version=5</code>, which is the better one, '
+      . 'but you do not have to - the dashboard tries both and remembers which the router '
+      . 'answered, and tries again if a firmware upgrade later changes the answer.</p>'
       . '<p>Or skip all of this: open <b>Connected devices</b> and press '
       . '<b>Set it up for me</b>, and the dashboard does it on every router at once.</p>'
       . $note
@@ -167,14 +169,19 @@ $url    = 'http://' . $ip . $sub . ($query !== '' ? '?' . $query : '');
  *
  * RouterOS 6 only does version 4; version 5 arrived with RouterOS 7. A client
  * using the wrong one simply fails to connect, and the error looks exactly like
- * an unreachable device. The version is remembered per router when the
- * dashboard sets the proxy up, and where it is not known yet both are tried and
- * the one that worked is saved.
+ * an unreachable device.
+ *
+ * The version is remembered per router, but a remembered version is only ever a
+ * guess about the router as it was. Upgrade the firmware and it becomes wrong:
+ * a router noted as version 4 while it was on RouterOS 6 now speaks 5 only, and
+ * a dashboard that trusts its own note keeps trying 4 and reports the device as
+ * unreachable for ever. So the remembered one is tried FIRST and the other is
+ * always kept as a fallback, and whatever actually worked is written back.
  */
-$order = ((int)$dev['socks_version'] === 4)
-    ? [CURLPROXY_SOCKS4]
-    : (((int)$dev['socks_version'] === 5) ? [CURLPROXY_SOCKS5_HOSTNAME]
-                                          : [CURLPROXY_SOCKS5_HOSTNAME, CURLPROXY_SOCKS4]);
+$remembered = (int)$dev['socks_version'];
+$order = ($remembered === 4)
+    ? [CURLPROXY_SOCKS4, CURLPROXY_SOCKS5_HOSTNAME]
+    : [CURLPROXY_SOCKS5_HOSTNAME, CURLPROXY_SOCKS4];
 
 $raw = false; $err = ''; $ch = null; $usedType = null;
 foreach ($order as $type) {
@@ -195,15 +202,21 @@ foreach ($order as $type) {
     $raw = curl_exec($ch);
     if ($raw !== false) { $usedType = $type; break; }
     $err = curl_error($ch);
-    if (count($order) > 1) { curl_close($ch); $ch = null; }
+    curl_close($ch); $ch = null;
 }
 
-// Remember what worked, so the next click goes straight there.
-if ($raw !== false && $usedType !== null && (int)$dev['socks_version'] === 0) {
-    try {
-        mt_db_write($db, "UPDATE devices SET socks_version=? WHERE id=?",
-                    [$usedType === CURLPROXY_SOCKS4 ? 4 : 5, (int)$dev['router_id']]);
-    } catch (Exception $e) { /* it will be worked out again next time */ }
+/* Write back whatever actually worked, not only the first time we ever looked.
+ * This is what lets the dashboard follow a firmware upgrade on its own: the
+ * first click after the upgrade costs one failed attempt, and every click after
+ * it goes straight to the version the router really speaks. */
+if ($raw !== false && $usedType !== null) {
+    $worked = ($usedType === CURLPROXY_SOCKS4) ? 4 : 5;
+    if ($worked !== $remembered) {
+        try {
+            mt_db_write($db, "UPDATE devices SET socks_version=? WHERE id=?",
+                        [$worked, (int)$dev['router_id']]);
+        } catch (Exception $e) { /* it will be worked out again next time */ }
+    }
 }
 
 if ($raw === false) {
@@ -212,9 +225,9 @@ if ($raw === false) {
         '<h1>Could not open ' . htmlspecialchars($ip) . '</h1>'
       . '<p><code>' . htmlspecialchars($err) . '</code></p>'
       . '<p>The route to the router is working or this page would not have loaded, so the usual '
-      . 'reasons are: the SOCKS access list does not allow this server, the device has its web '
-      . 'interface switched off, or it only listens on HTTPS. Cisco switches in particular are '
-      . 'often managed over SSH with no web server at all.</p>', 502);
+      . 'reasons are: the SOCKS access list on the router does not allow this server, the device '
+      . 'has its web interface switched off, or it only listens on HTTPS. Both SOCKS versions '
+      . 'were tried, so a firmware upgrade on the router is not the cause.</p>', 502);
 }
 
 $headerLen = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
