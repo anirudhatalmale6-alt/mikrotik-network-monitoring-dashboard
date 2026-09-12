@@ -320,7 +320,13 @@ if ($raw === false) {
       . '<p>The route to the router is working or this page would not have loaded, so the usual '
       . 'reasons are: the SOCKS access list on the router does not allow this server, the device '
       . 'has its web interface switched off, or it only listens on HTTPS. Both SOCKS versions '
-      . 'were tried, so a firmware upgrade on the router is not the cause.</p>', 502);
+      . 'were tried, so a firmware upgrade on the router is not the cause.</p>'
+      . '<p>If <i>every</i> device behind <b>' . htmlspecialchars($dev['router']) . '</b> fails the '
+      . 'same way, the problem is the way in rather than the device: this server is trying port '
+      . '<b>' . (int)$socksPort . '</b> on ' . htmlspecialchars($dev['router_host']) . '. Some '
+      . 'networks drop 1080 in particular - it times out instead of being refused. Open '
+      . '<b>Connected devices</b>, set a different SOCKS port such as 18080 and press '
+      . '<b>Set it up for me</b> again.</p>', 502);
 }
 
 $headerLen = curl_getinfo($ch, CURLINFO_HEADER_SIZE);

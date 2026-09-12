@@ -2,3 +2,4 @@ data/monitor.sqlite
 data/monitor.sqlite-*
 data/poll.lock
 data/bw.lock
+*.log

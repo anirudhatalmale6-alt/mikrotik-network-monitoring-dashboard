@@ -1138,6 +1138,32 @@ switch ($action) {
                 }
                 $ros->close();
                 $r['ok'] = $ok; $r['steps'] = $steps; $r['error'] = $err;
+
+                /**
+                 * Setting the router up is not the same as being able to reach
+                 * it. His line drops port 1080 before it arrives - 1080 times
+                 * out where 18080 is refused in a fifth of a second, and a
+                 * refusal means the packet got there. So a setup that "worked"
+                 * left every device unreachable and nothing said why.
+                 *
+                 * One connection attempt answers it. Nothing is sent: the point
+                 * is only whether the port answers at all.
+                 */
+                if ($ok && !$off) {
+                    $e2 = 0; $es = '';
+                    $probe = @fsockopen($d['host'], $port, $e2, $es, 8);
+                    if ($probe) {
+                        fclose($probe);
+                        $r['reachable'] = true;
+                    } else {
+                        $r['reachable'] = false;
+                        $r['steps'][] = ['step' => 'Reachable?',
+                            'detail' => 'the router is set up, but this server cannot open port ' . $port
+                                      . ' on ' . $d['host'] . ' (' . ($es ?: 'no answer') . '). Some networks '
+                                      . 'drop 1080 in particular. Change the port above - 18080 is a good '
+                                      . 'second choice - and run this again.'];
+                    }
+                }
             } catch (Exception $e) {
                 $ros->close();
                 $r['error'] = $e->getMessage();
