@@ -183,6 +183,38 @@ $order = ($remembered === 4)
     ? [CURLPROXY_SOCKS4, CURLPROXY_SOCKS5_HOSTNAME]
     : [CURLPROXY_SOCKS5_HOSTNAME, CURLPROXY_SOCKS4];
 
+/**
+ * Logging in to the device itself.
+ *
+ * Most of this equipment asks for its own username and password, and there are
+ * two ways it does that. Both have to be carried through, or the device is
+ * visible but unusable:
+ *
+ *   HTTP basic auth - the device answers 401 with a WWW-Authenticate header.
+ *     That header has to reach the browser or no login box ever appears, and
+ *     the browser's Authorization header has to reach the device or whatever
+ *     was typed goes nowhere. A Cisco Aironet does exactly this.
+ *   A login form - the browser sends a POST. Without relaying the method and
+ *     the body, pressing Sign in silently reloads the same page.
+ */
+$fwd = [];
+$auth = $_SERVER['HTTP_AUTHORIZATION']
+     ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+     ?? '';
+if ($auth === '' && function_exists('getallheaders')) {
+    foreach ((array)getallheaders() as $k => $v) {
+        if (strcasecmp($k, 'Authorization') === 0) { $auth = (string)$v; break; }
+    }
+}
+if ($auth !== '') $fwd[] = 'Authorization: ' . $auth;
+
+$isPost = (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST');
+$postBody = '';
+if ($isPost) {
+    $postBody = file_get_contents('php://input');
+    if (($ct = $_SERVER['CONTENT_TYPE'] ?? '') !== '') $fwd[] = 'Content-Type: ' . $ct;
+}
+
 $raw = false; $err = ''; $ch = null; $usedType = null;
 foreach ($order as $type) {
     $ch = curl_init($url);
@@ -198,7 +230,12 @@ foreach ($order as $type) {
         CURLOPT_SSL_VERIFYPEER => false,      // these devices ship self-signed certs
         CURLOPT_SSL_VERIFYHOST => false,
         CURLOPT_USERAGENT      => $_SERVER['HTTP_USER_AGENT'] ?? 'Mozilla/5.0',
+        CURLOPT_HTTPHEADER     => $fwd,
     ]);
+    if ($isPost) {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postBody);
+    }
     $raw = curl_exec($ch);
     if ($raw !== false) { $usedType = $type; break; }
     $err = curl_error($ch);
@@ -240,9 +277,24 @@ $body = substr($raw, $headerLen);
 
 http_response_code($status ?: 200);
 if ($ctype !== '') header('Content-Type: ' . $ctype);
-// Let the device set its own cookies, so a login on the device survives.
+/* Headers that have to come back for the device to be usable, not just visible:
+ *   Set-Cookie        - a login on the device survives from page to page
+ *   WWW-Authenticate  - without it the browser shows the device's bare "401
+ *                       Unauthorized" text instead of asking for a password
+ *   Location          - FOLLOWLOCATION is off so redirects are passed to the
+ *                       browser, and a root-relative one has to be pointed back
+ *                       through this proxy or it lands on the dashboard instead
+ */
 foreach (explode("\r\n", $head) as $line) {
-    if (stripos($line, 'Set-Cookie:') === 0) header($line, false);
+    if (stripos($line, 'Set-Cookie:') === 0 || stripos($line, 'WWW-Authenticate:') === 0) {
+        header($line, false);
+    } elseif (stripos($line, 'Location:') === 0) {
+        $loc = trim(substr($line, 9));
+        if ($loc !== '' && $loc[0] === '/' && substr($loc, 0, 2) !== '//') {
+            $loc = $prefix . $loc;
+        }
+        header('Location: ' . $loc, true);
+    }
 }
 header('Content-Security-Policy: sandbox allow-forms allow-scripts allow-same-origin');
 
