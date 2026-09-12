@@ -165,6 +165,56 @@ $query  = $_SERVER['QUERY_STRING'] ?? '';
 $url    = 'http://' . $ip . $sub . ($query !== '' ? '?' . $query : '');
 
 /**
+ * Signing in to the device, without relying on the browser's own password box.
+ *
+ * The obvious way is to pass the device's WWW-Authenticate header back and let
+ * the browser ask. That worked here and did nothing on his server: LiteSpeed
+ * does not pass that header out of PHP, so the browser never knew it was being
+ * asked and showed the device's bare "401 Unauthorized" text instead. Measured
+ * on both - same code, same device, header present locally and gone there.
+ *
+ * So the challenge is answered here instead. The credentials are held in the
+ * admin's own session, server side, never in a cookie or a URL, and are sent on
+ * to the device as an Authorization header. That behaves the same on any
+ * hosting, and it names the device being signed in to rather than making the
+ * browser ask for "the dashboard".
+ */
+$authKey = 'mt_devauth_' . (int)$dev['router_id'] . '_' . $ip;
+
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['__mtlogin'])) {
+    $_SESSION[$authKey] = base64_encode(((string)($_POST['__mtuser'] ?? ''))
+                                . ':' . ((string)($_POST['__mtpass'] ?? '')));
+    header('Location: ' . $prefix . ($_POST['__mtback'] ?? '/'));
+    exit;
+}
+
+/** The form shown when the device wants a password. */
+function mt_dev_login($prefix, $back, $ip, $name, $realm, $wrong) {
+    $t = $wrong ? 'Wrong username or password' : 'This device needs a login';
+    mt_dev_page($t,
+        '<h1>' . htmlspecialchars($name ?: $ip) . ' is asking for a password</h1>'
+      . ($wrong ? '<p><b>That username and password were refused by the device.</b></p>' : '')
+      . '<p>' . htmlspecialchars($ip) . ' answered with its own login request'
+      . ($realm !== '' ? ' (<code>' . htmlspecialchars($realm) . '</code>)' : '')
+      . '. These are the credentials of the device itself, not of this dashboard.</p>'
+      . '<form method="post" action="' . htmlspecialchars($prefix . $back, ENT_QUOTES) . '">'
+      . '<input type="hidden" name="__mtlogin" value="1">'
+      . '<input type="hidden" name="__mtback" value="' . htmlspecialchars($back, ENT_QUOTES) . '">'
+      . '<p><label>Username<br><input name="__mtuser" autocomplete="off" autofocus '
+      . 'style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;'
+      . 'font:14px system-ui"></label></p>'
+      . '<p><label>Password<br><input name="__mtpass" type="password" autocomplete="off" '
+      . 'style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;'
+      . 'font:14px system-ui"></label></p>'
+      . '<p><button type="submit" style="padding:9px 16px;border:0;border-radius:8px;'
+      . 'background:#1d4ed8;color:#fff;font:600 14px system-ui;cursor:pointer">Sign in to the '
+      . 'device</button></p></form>'
+      . '<p style="color:#64748b;font-size:12.5px">Kept for this browser session only, and '
+      . 'only on the server - it is never written to a cookie or into the address bar.</p>',
+        401);
+}
+
+/**
  * Which SOCKS to speak.
  *
  * RouterOS 6 only does version 4; version 5 arrived with RouterOS 7. A client
@@ -205,6 +255,12 @@ if ($auth === '' && function_exists('getallheaders')) {
     foreach ((array)getallheaders() as $k => $v) {
         if (strcasecmp($k, 'Authorization') === 0) { $auth = (string)$v; break; }
     }
+}
+// What was typed into the form above wins over anything the browser sent.
+$usedStored = false;
+if (!empty($_SESSION[$authKey])) {
+    $auth = 'Basic ' . $_SESSION[$authKey];
+    $usedStored = true;
 }
 if ($auth !== '') $fwd[] = 'Authorization: ' . $auth;
 
@@ -274,6 +330,30 @@ curl_close($ch);
 
 $head = substr($raw, 0, $headerLen);
 $body = substr($raw, $headerLen);
+
+/**
+ * A 401 from the device means it wants its own login. Answer it here rather
+ * than handing the challenge to the browser, because not every server lets
+ * WWW-Authenticate back out of PHP - his does not. Digest and anything else
+ * exotic is passed through untouched instead, since a username and password
+ * box cannot satisfy those.
+ */
+if ($status === 401) {
+    $challenge = '';
+    foreach (explode("\r\n", $head) as $line) {
+        if (stripos($line, 'WWW-Authenticate:') === 0) {
+            $challenge = trim(substr($line, 17));
+            break;
+        }
+    }
+    if ($challenge === '' || stripos($challenge, 'basic') === 0) {
+        $realm = '';
+        if (preg_match('/realm\s*=\s*"([^"]*)"/i', $challenge, $m)) $realm = $m[1];
+        if ($usedStored) unset($_SESSION[$authKey]);   // stop reusing a refused password
+        $name = $dev['identity'] ?: ($dev['hostname'] ?: ($dev['board'] ?: ''));
+        mt_dev_login($prefix, $sub, $ip, $name, $realm, $usedStored);
+    }
+}
 
 http_response_code($status ?: 200);
 if ($ctype !== '') header('Content-Type: ' . $ctype);
