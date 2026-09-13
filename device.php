@@ -57,7 +57,8 @@ if ($framed) {
 }
 
 $st = $db->prepare("SELECT l.*, d.name AS router, d.host AS router_host, d.socks_port,
-                            d.socks_version, d.id AS router_id
+                            d.socks_version, d.id AS router_id,
+                            d.api_port, d.username, d.password
                       FROM lan_devices l JOIN devices d ON d.id = l.device_id
                      WHERE l.id = ?");
 $st->execute([$id]);
@@ -89,6 +90,63 @@ if ($ip === '') {
 }
 
 $socksPort = (int)$dev['socks_port'];
+
+/**
+ * An empty socks_port means this dashboard has no note of a way in. It does not
+ * mean there isn't one. Rebuild the database - a fresh install, a restore, a
+ * folder deleted and re-uploaded - and the note is gone while the router is
+ * still set up exactly as it was. Showing "no way in yet" then is not just
+ * unhelpful, it is wrong, and it sends the user off to configure something that
+ * is already configured.
+ *
+ * So ask the router before saying anything. If its SOCKS is on, adopt the port
+ * it is actually using and carry on.
+ */
+if ($socksPort <= 0) {
+    require_once __DIR__ . '/lib/routeros.php';
+    $probe = new RouterOs(max(4, (int)mt_setting('api_timeout', 6)));
+    try {
+        $probe->connect($dev['router_host'], $dev['api_port'], $dev['username'], $dev['password']);
+        $s = $probe->query('/ip/socks/print');
+        $probe->close();
+        $row = $s[0] ?? [];
+        if ((($row['enabled'] ?? 'false') === 'true') && (int)($row['port'] ?? 0) > 0) {
+            $socksPort = (int)$row['port'];
+            try {
+                mt_db_write($db, "UPDATE devices SET socks_port=? WHERE id=?",
+                            [$socksPort, (int)$dev['router_id']]);
+            } catch (Exception $e) { /* using it now matters more than noting it */ }
+        }
+    } catch (Exception $e) {
+        $probe->close();   // fall through to the setup page below
+    }
+}
+
+/**
+ * Which port to tell the user to open, when there really is nothing set up.
+ *
+ * This page used to say 1080 because that is the usual SOCKS port. On his line
+ * 1080 is dropped before it reaches the router, so following these instructions
+ * produced a router that was correctly configured and still unreachable - and
+ * he followed them three times. Instructions that cannot work are worse than no
+ * instructions.
+ *
+ * A port can be tested before anything is configured, because the two failures
+ * look different from here: a blocked port times out, while a port that is
+ * merely closed is refused immediately. Refused is the good answer - it proves
+ * the packet reached the router.
+ */
+function mt_pick_socks_port($host, array $candidates = [1080, 18080, 8080]) {
+    foreach ($candidates as $port) {
+        $e = 0; $es = ''; $t0 = microtime(true);
+        $s = @fsockopen($host, $port, $e, $es, 4);
+        if ($s) { fclose($s); return [$port, 'open']; }
+        // under a second and refused = it got there; a timeout means it did not
+        if ((microtime(true) - $t0) < 3.0) return [$port, 'reachable'];
+    }
+    return [$candidates[0], 'unknown'];
+}
+
 if ($socksPort <= 0) {
     // The address the router must allow. SERVER_ADDR is the address this host
     // answers on, which is the right one on a VPS but is a loopback or a NAT
@@ -102,16 +160,27 @@ if ($socksPort <= 0) {
         $note = '<p><b>Replace YOUR.SERVER.IP</b> with the public address of the server running this '
               . 'dashboard - that is the address the router will see the connection coming from.</p>';
     }
+    list($pick, $why) = mt_pick_socks_port($dev['router_host']);
+    $portNote = ($why === 'unknown')
+        ? '<p><b>Note:</b> none of the usual ports answered from this server, so '
+          . $pick . ' is only a guess. If it does not work afterwards, try another one.</p>'
+        : ($pick !== 1080
+            ? '<p><b>Port ' . $pick . ', not the usual 1080.</b> 1080 does not get through from this '
+            . 'server to ' . htmlspecialchars($dev['router_host']) . ' - it times out rather than being '
+            . 'refused, which means something on the way is dropping it. ' . $pick . ' does get '
+            . 'through, so these commands use it.</p>'
+            : '');
     mt_dev_page('Not set up yet',
         '<h1>' . htmlspecialchars($dev['router']) . ' has no way in yet</h1>'
       . '<p><b>' . htmlspecialchars($dev['ip']) . '</b> is a private address. This server cannot reach it '
       . 'unless the router lets it through.</p>'
       . '<p>RouterOS has that built in. On <b>' . htmlspecialchars($dev['router']) . '</b>:</p>'
-      . '<pre>/ip socks set enabled=yes port=1080'
+      . '<pre>/ip socks set enabled=yes port=' . $pick
       . "\n" . '/ip socks access add src-address=' . htmlspecialchars($me) . ' action=allow'
       . "\n" . '/ip socks access add action=deny'
-      . "\n" . '/ip firewall filter add chain=input protocol=tcp dst-port=1080 src-address='
+      . "\n" . '/ip firewall filter add chain=input protocol=tcp dst-port=' . $pick . ' src-address='
               . htmlspecialchars($me) . ' action=accept place-before=0</pre>'
+      . $portNote
       . '<p>Paste them one line at a time into the WinBox terminal. Two things about the '
       . 'wording, both learned the hard way: they use <b>spaces, not slashes</b>, because '
       . 'RouterOS 6 answers <code>expected command name</code> to the slash form; and there '
@@ -122,7 +191,8 @@ if ($socksPort <= 0) {
       . '<p>Or skip all of this: open <b>Connected devices</b> and press '
       . '<b>Set it up for me</b>, and the dashboard does it on every router at once.</p>'
       . $note
-      . '<p>Then set the SOCKS port to 1080 on this router in the dashboard. Only this server is '
+      . '<p>Then set the SOCKS port to ' . $pick . ' on this router in the dashboard - or just open '
+      . 'this page again and it will read the port off the router by itself. Only this server is '
       . 'allowed in, and nothing on your network is exposed to the internet.</p>', 409);
 }
 
